@@ -20,8 +20,15 @@ import {
   NOTEBOOK_AUTOSAVE_CONFLICT_RESOLUTION,
   NOTEBOOK_AUTOSAVE_FAILED_REASON,
   NOTEBOOK_ENTRY_POINT,
+  type NotebookEntryPoint,
 } from '../analytics/types';
-import { createNotebook, NotebookConflictError, updateNotebook } from '../api/notebookResource';
+import {
+  createNotebook,
+  NotebookConflictError,
+  readNotebookResourceVersion,
+  type StoredCell,
+  updateNotebook,
+} from '../api/notebookResource';
 import { transformNotebookSceneToSaveModel } from '../serialization/transformNotebookSceneToSaveModel';
 import { type NotebookElement, type PanelKind, type Spec as NotebookSpec } from '../types';
 
@@ -129,6 +136,8 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
   private inFlightCellTimeRangesEdited: ReadonlySet<NotebookCellItem> = new Set();
   /** Set while `write` adopts a freshly created uid, so that is not mistaken for someone's edit. */
   private adoptingUid = false;
+  /** Set while ids the server gave cells are put on them, which changes no content and must not save. */
+  private adoptingIds = false;
   /** Set by `overwriteConflict` for exactly the one write it forces through. Consumed in `write`. */
   private overwriteNextSave = false;
   /** The save now running, so a caller that reports an outcome can wait for the write to land. */
@@ -147,13 +156,19 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
   private stopped = false;
   /** Failures in a row since the last save that landed. `autosave_failed` sends this as `attempt`. */
   private failedAttempts = 0;
+  private entryPoint: NotebookEntryPoint = NOTEBOOK_ENTRY_POINT.NOTEBOOK_LIST;
 
   public constructor(private scene: NotebookScene) {
     super({ status: 'idle' });
   }
 
+  public setEntryPoint(source: NotebookEntryPoint): void {
+    this.entryPoint = source;
+  }
+
   /** Begins watching for changes. Returns the teardown, which flushes anything still pending. */
   public start(): () => void {
+    this.stopped = false;
     if (this.baseline === undefined) {
       // Entering edit mode publishes state changes of its own, so without a baseline the first
       // comparison would write the notebook straight back unchanged.
@@ -167,7 +182,7 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
     }
 
     this.changeSub = this.scene.subscribeToEvent(SceneObjectStateChangedEvent, ({ payload }) => {
-      if (this.adoptingUid || this.restoringVizConfigs) {
+      if (this.adoptingUid || this.adoptingIds || this.restoringVizConfigs) {
         return;
       }
 
@@ -233,8 +248,11 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
    * assistant tells someone their notebook was written, and only the finished request knows whether it
    * was. Throws when the save failed, so the caller can say that rather than claim a write that never
    * reached the server.
+   *
+   * `overwrite` is a writer's answer to a conflict it already reported: it skips the resourceVersion
+   * precondition for this one write, as `overwriteConflict` does for the modal's answer.
    */
-  public async saveDocumentChange(): Promise<void> {
+  public async saveDocumentChange({ overwrite = false }: { overwrite?: boolean } = {}): Promise<void> {
     // These writers hand over a whole document, so everything in the scene now is the notebook's own,
     // and whatever a reader had changed went with the scene this one replaced.
     this.timeSettingsEdited = true;
@@ -247,9 +265,18 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
     this.vizConfigsChangedWhileReading.clear();
     this.vizConfigsBeforeReadingChange.clear();
     this.editedByWriter = true;
+    // Added to, not assigned: the modal's own answer may already be waiting to be used.
+    this.overwriteNextSave ||= overwrite;
     this.schedule();
 
-    await this.awaitPendingSave();
+    try {
+      await this.awaitPendingSave();
+    } finally {
+      // A save that found nothing to write never consumes it, and it must not reach a later one.
+      if (overwrite) {
+        this.overwriteNextSave = false;
+      }
+    }
   }
 
   /**
@@ -264,7 +291,9 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
       return;
     }
 
-    this.savedTimeSettings = timeSettings;
+    // Never the stored `hideTimepicker`: the scene ignores it, and `buildSpecToSave` substitutes this
+    // whenever time was not edited, so keeping it would write `true` back on every cell or title save.
+    this.savedTimeSettings = { ...timeSettings, hideTimepicker: false };
   }
 
   /**
@@ -277,6 +306,21 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
     this.timeSettingsEdited = false;
     this.vizConfigsEdited.clear();
     this.cellTimeRangesEdited.clear();
+  }
+
+  public markVisualizationEdited(elementName: string, wasEditing = this.scene.state.isEditing): void {
+    if (!wasEditing || this.scene.state.isDraft) {
+      return;
+    }
+    this.vizConfigsEdited.add(elementName);
+    const somethingToWrite = this.hasSomethingToWrite();
+    if (somethingToWrite) {
+      this.editedByWriter = true;
+    }
+    this.schedule(somethingToWrite);
+    if (this.stopped) {
+      this.flush();
+    }
   }
 
   /**
@@ -496,6 +540,41 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
   }
 
   /**
+   * Waits for the save already running, if there is one. Unlike `awaitPendingSave` it never brings a
+   * waiting edit forward, and it does not throw when a save failed.
+   *
+   * For a caller that needs `savedResourceVersion` to be settled and has no business saving someone's
+   * edit: starting that save here could conflict and raise the overwrite modal over a request that is
+   * about to put the same question to the person somewhere else.
+   */
+  public async awaitInFlightSave(): Promise<void> {
+    while (this.inFlightSave) {
+      await this.inFlightSave;
+    }
+  }
+
+  /**
+   * Whether someone else saved the notebook after this scene loaded it, for a write from outside the
+   * notebook that should be refused rather than overwrite theirs.
+   */
+  public async isSavedElsewhere(): Promise<boolean> {
+    const uid = this.scene.state.uid;
+    if (!uid || this.state.savedResourceVersion === undefined) {
+      return false;
+    }
+
+    // Let a save of this scene's own that is already running land first. Otherwise the server can
+    // already hold a version this scene wrote but has not yet recorded, which would read as someone
+    // else's save. Only one already running: bringing a waiting edit forward could conflict and raise
+    // the overwrite modal for it while the caller is about to ask the person elsewhere.
+    await this.awaitInFlightSave();
+    const serverVersion = await readNotebookResourceVersion(uid);
+    // Read after the request, not before: a save that finished during it moved both versions.
+    const savedVersion = this.state.savedResourceVersion;
+    return serverVersion !== undefined && savedVersion !== undefined && serverVersion !== savedVersion;
+  }
+
+  /**
    * Brings forward the save the debounce was already going to make, for a caller about to read the
    * notebook back from the server. Unlike `saveDocumentChange` it claims nothing on the way.
    *
@@ -520,6 +599,15 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
   public retry(): void {
     this.schedule();
     this.flush();
+  }
+
+  /**
+   * The Retry button's own entry, so the press is counted and an overwrite, which also calls `retry`,
+   * is not: that one is already reported as the answer to the conflict prompt.
+   */
+  public retryFromButton(): void {
+    NotebookAnalytics.autosaveRetried(this.scene.state.uid ?? '', this.failedAttempts);
+    this.retry();
   }
 
   /**
@@ -829,8 +917,24 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
     let hitConflict = false;
 
     this.inFlightSave = this.write(uid, spec)
-      .then(({ generation, resourceVersion }) => {
-        this.recordWritten(spec, serialized, panels, cells, cellTimeRangesEdited);
+      .then(({ generation, resourceVersion, cells: stored }) => {
+        // The ids the server just gave cells go into the baseline before they go onto the cells, because
+        // putting them on the cells changes what serializes: a baseline without them would read as an
+        // edit and save the notebook again.
+        const adopted = adoptedCellIds(
+          spec.layout.spec.cells.map((item) => ({ element: item.spec.element.name, id: item.spec.id })),
+          stored,
+          cells
+        );
+        const written = adopted.size ? withCellIds(spec, cells, adopted) : spec;
+        this.recordWritten(
+          written,
+          adopted.size ? JSON.stringify(written) : serialized,
+          panels,
+          cells,
+          cellTimeRangesEdited
+        );
+        this.adoptCellIds(adopted);
         this.hasSavedOnce = true;
         this.failedAttempts = 0;
         this.setState({
@@ -884,7 +988,9 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
         // Not once stopped: the scene has deactivated (navigated away, tab closed), and this is the
         // teardown's own flush resolving after the fact. Publishing now would show this on whatever
         // page the user is on instead, with no route change left to come along and clear it.
-        if (isConflict && !this.stopped) {
+        // Not when an overwrite is already chosen and queued behind this save: asking again would put a
+        // question to the person after they answered it.
+        if (isConflict && !this.stopped && !this.overwriteNextSave) {
           const notebookUid = this.scene.state.uid ?? '';
           appEvents.publish(
             new ShowConfirmModalEvent({
@@ -921,7 +1027,9 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
           // savedResourceVersion, so it can only conflict again and raise a second overwrite prompt.
           // The edits that set this flag are not lost — they're already merged into the pending
           // change above, and the next real edit (or the prompt's own "Save and overwrite") saves them.
-          if (!hitConflict) {
+          // Unless an overwrite was already chosen for it: that retry skips the precondition, and
+          // dropping it would leave a confirmed write unsent.
+          if (!hitConflict || this.overwriteNextSave) {
             this.saveNow();
           }
         }
@@ -938,26 +1046,84 @@ export class NotebookAutosave extends StateManagerBase<NotebookAutosaveState> {
   private write(
     uid: string | undefined,
     spec: NotebookSpec
-  ): Promise<{ generation?: number; resourceVersion?: string }> {
+  ): Promise<{ generation?: number; resourceVersion?: string; cells?: StoredCell[] }> {
     if (uid) {
       const overwrite = this.overwriteNextSave;
       this.overwriteNextSave = false;
       return updateNotebook(uid, spec, overwrite ? undefined : this.state.savedResourceVersion);
     }
 
-    return createNotebook(spec).then(({ uid: created, generation, resourceVersion }) => {
+    return createNotebook(spec).then(({ uid: created, generation, resourceVersion, cells: stored }) => {
       this.adoptingUid = true;
       try {
         this.scene.setState({ uid: created });
       } finally {
         this.adoptingUid = false;
       }
-      // Only a blank notebook reaches this create, and the list is the only link to the blank route
-      // today. A second way in has to hand its own source to the autosave.
-      NotebookAnalytics.created(created, NOTEBOOK_ENTRY_POINT.NOTEBOOK_LIST, spec.layout.spec.cells.length);
-      return { generation, resourceVersion };
+      NotebookAnalytics.created(created, this.entryPoint, spec.layout.spec.cells.length);
+      return { generation, resourceVersion, cells: stored };
     });
   }
+
+  /** Puts the ids the server gave cells on them, without that counting as an edit. */
+  private adoptCellIds(adopted: ReadonlyMap<NotebookCellItem, string>): void {
+    this.adoptingIds = true;
+    try {
+      for (const [cell, id] of adopted) {
+        cell.setState({ id });
+      }
+    } finally {
+      this.adoptingIds = false;
+    }
+  }
+}
+
+/**
+ * The id the server gave each cell this save sent without one, read off what it stored.
+ *
+ * Matched by position: the server never reorders or drops layout items, and `cells` is the list the
+ * spec was built from. Position rather than element name, because two cells can share a name. Anything
+ * that does not line up (a different count, a different element at an index) adopts nothing, which is
+ * what a server that does not know about ids looks like too.
+ */
+function adoptedCellIds(
+  sent: StoredCell[],
+  storedItems: StoredCell[] | undefined,
+  cells: NotebookCellItem[]
+): Map<NotebookCellItem, string> {
+  const adopted = new Map<NotebookCellItem, string>();
+  if (!storedItems || storedItems.length !== sent.length || cells.length !== sent.length) {
+    return adopted;
+  }
+
+  sent.forEach((item, index) => {
+    const { id, element } = storedItems[index];
+    if (!id || item.id || element !== item.element) {
+      return;
+    }
+    adopted.set(cells[index], id);
+  });
+  return adopted;
+}
+
+/**
+ * The spec that was sent, with the ids the server gave added. Keys are written in the order
+ * `NotebookLayoutManager.serialize` writes them, because the baseline is compared as a string.
+ */
+function withCellIds(
+  spec: NotebookSpec,
+  cells: NotebookCellItem[],
+  adopted: ReadonlyMap<NotebookCellItem, string>
+): NotebookSpec {
+  const items = spec.layout.spec.cells.map((item, index) => {
+    const id = adopted.get(cells[index]);
+    if (!id) {
+      return item;
+    }
+    const { element, ...rest } = item.spec;
+    return { ...item, spec: { element, id, ...rest } };
+  });
+  return { ...spec, layout: { ...spec.layout, spec: { ...spec.layout.spec, cells: items } } };
 }
 
 /**
@@ -1085,16 +1251,12 @@ function isVizPanelState(state: SceneObjectState): state is VizPanel['state'] {
 /**
  * Whether a state change was a change to the notebook's time settings.
  *
- * `buildTimeSettingsSpec` reads them from these four places, so all four have to be named here: one left
+ * `buildTimeSettingsSpec` reads them from these three places, so all three have to be named here: one left
  * out is one whose edits get thrown away as if a reader had made them.
  */
 export function changesTimeSettings(payload: SceneObjectStateChangedPayload, scene: NotebookScene): boolean {
-  const { changedObject, partialUpdate } = payload;
+  const { changedObject } = payload;
   const { $timeRange, timePicker, refreshPicker } = scene.state;
-
-  if (changedObject === scene) {
-    return 'hideTimeControls' in partialUpdate;
-  }
 
   return changedObject === $timeRange || changedObject === timePicker || changedObject === refreshPicker;
 }

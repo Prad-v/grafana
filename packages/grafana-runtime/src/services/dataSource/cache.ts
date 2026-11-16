@@ -1,8 +1,12 @@
 import { type DataSourceInstanceListItem, type DataSourceInstanceSettings } from '@grafana/data';
 
 import { getCachedPromise, invalidateCachedPromise } from '../../utils/getCachedPromise';
+import { NoUserSessionError } from '../user';
 
 import { notifyDataSourceCacheChanged } from './cacheGeneration';
+import { MT_FILL_FAILED } from './constants';
+import { DataSourceListFetchError } from './errors';
+import { logDataSourceInstanceError } from './logging';
 import { type DataSourceCacheSource, type DataSourceListSnapshot } from './sources/types';
 
 const FILL_CACHE_KEY = 'grafana-runtime:ds-cache-fill';
@@ -31,7 +35,6 @@ export function toListItem(settings: DataSourceInstanceSettings): DataSourceInst
   return {
     uid: settings.uid,
     type: settings.type,
-    apiVersion: settings.apiVersion,
     name: settings.name,
     meta: settings.meta,
   };
@@ -52,7 +55,7 @@ export function setDataSourceCacheSource(selected: DataSourceCacheSource): void 
     applySnapshot(initial);
     return;
   }
-  awaitFill().catch(() => {
+  awaitFill('boot').catch(() => {
     // The rejection reaches every caller through awaitFill; nothing to do for the boot call.
   });
 }
@@ -61,8 +64,11 @@ export function setDataSourceCacheSource(selected: DataSourceCacheSource): void 
  * Wait until the cache can be read. Resolves at once when it is filled (or when no source was
  * selected, as in tests that seed nothing). Concurrent callers share one in-flight fill, and
  * because a rejected promise is not cached, a call after a failed fill starts a new one.
+ *
+ * `trigger` tells a failed boot fill apart from a later lookup that retries it. A caller that
+ * joins an in-flight fill does not change the trigger of that fill.
  */
-export function awaitFill(): Promise<void> {
+export function awaitFill(trigger: 'boot' | 'lookup' = 'lookup'): Promise<void> {
   if (filled || !source) {
     return Promise.resolve();
   }
@@ -78,7 +84,12 @@ export function awaitFill(): Promise<void> {
     } catch (error) {
       // When a newer snapshot filled the cache meanwhile, this failure no longer matters.
       if (version === snapshotVersion) {
-        throw error;
+        // Expected without a session: nothing was requested, so there is no failure to log.
+        if (error instanceof NoUserSessionError) {
+          throw error;
+        }
+        logDataSourceInstanceError(MT_FILL_FAILED, error, { reason: 'fill', source: from.kind, trigger });
+        throw new DataSourceListFetchError(error);
       }
     } finally {
       // Settled fills are tracked by `filled`; keep the shared promise cache for in-flight work.

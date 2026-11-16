@@ -1,7 +1,7 @@
 import { screen } from '@testing-library/react';
 import { render } from 'test/test-utils';
 
-import { mockLocalStorage } from 'app/features/alerting/unified/mocks';
+import { mockLocalStorage } from 'app/features/alerting/unified/testSetup/mockLocalStorage';
 
 import { OptionsPaneCategory, type OptionsPaneCategoryProps } from './OptionsPaneCategory';
 
@@ -30,6 +30,12 @@ function setLocalStorageState(isExpanded: boolean, id = categoryId) {
 describe('OptionsPaneCategory', () => {
   afterEach(() => {
     window.localStorage.clear();
+  });
+
+  it('labels the expanded options group with the category title', () => {
+    setup();
+
+    expect(screen.getByRole('group', { name: 'Test category' })).toHaveTextContent(childText);
   });
 
   describe('initial expanded state', () => {
