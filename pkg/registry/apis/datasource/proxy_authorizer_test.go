@@ -10,6 +10,7 @@ import (
 	"github.com/grafana/authlib/authz"
 	authlib "github.com/grafana/authlib/types"
 	"github.com/grafana/grafana/pkg/api/pluginproxy"
+	"github.com/grafana/grafana/pkg/services/authz/rbac"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/stretchr/testify/require"
 	krequest "k8s.io/apiserver/pkg/endpoints/request"
@@ -34,6 +35,12 @@ func TestProxyRouteAccessChecker(t *testing.T) {
 		verb        string
 	}{
 		{"datasources:query", "query", "create"},
+		{"datasources:read", "", "get"},
+		{"datasources:delete", "", "delete"},
+		{"datasources.permissions:read", "", "get_permissions"},
+		{"datasources.permissions:write", "", "set_permissions"},
+		{"datasources.caching:read", "caching", "get"},
+		{"datasources.caching:write", "caching", "update"},
 		{"alert.rules.external:read", "alertrules", "get"},
 		{"alert.rules.external:write", "alertrules", "update"},
 		{"alert.instances.external:read", "alertinstances", "get"},
@@ -135,4 +142,22 @@ func TestProxyRouteAccessCheckerTenantScope(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, allowed)
 	require.Len(t, namespaces, 5, "a missing namespace must not reach authz")
+}
+
+// Every route action the proxy translates must resolve back to the same
+// datasource-scoped action in the authz mapper, otherwise authz denies the route.
+func TestProxyRouteChecksRoundTrip(t *testing.T) {
+	reg := rbac.NewMapperRegistry()
+	for _, group := range []string{"datasource.grafana.app", "prometheus.datasource.grafana.app", "grafana-pyroscope-datasource.datasource.grafana.app"} {
+		for action, check := range proxyRouteChecks {
+			t.Run(group+"/"+action, func(t *testing.T) {
+				mapping, ok := reg.Get(group, "datasources", check.subresource)
+				require.True(t, ok, "no mapping for subresource %q", check.subresource)
+				got, ok := mapping.Action(check.verb)
+				require.True(t, ok, "no action for verb %q", check.verb)
+				require.Equal(t, action, got)
+				require.Equal(t, "datasources:uid:ds-1", mapping.Scope("ds-1"))
+			})
+		}
+	}
 }
