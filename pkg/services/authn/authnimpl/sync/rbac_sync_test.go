@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/open-feature/go-sdk/openfeature/memprovider"
@@ -886,12 +887,21 @@ func TestRBACSync_DatasourceTokenPermissions(t *testing.T) {
 		"datasources:query", "datasources.permissions:read", "datasources.permissions:write",
 		"datasources.caching:read", "datasources.caching:write",
 	}
+	// Registered so a leak through group-wide grants would show up in the result.
+	alertingActions := []string{
+		"alert.rules.external:read", "alert.rules.external:write",
+		"alert.instances.external:read", "alert.instances.external:write",
+		"alert.notifications.external:read", "alert.notifications.external:write",
+	}
 	for _, tc := range []struct {
 		grant   string
 		actions []string
 	}{
 		{"loki.datasource.grafana.app:get", []string{"datasources:read", "datasources.caching:read"}},
 		{"loki.datasource.grafana.app:*", allActions},
+		{"datasource.grafana.app:get", []string{"datasources:read", "datasources.caching:read"}},
+		{"datasource.grafana.app:update", []string{"datasources:write", "datasources.caching:write"}},
+		{"datasource.grafana.app:*", allActions},
 		{"query.grafana.app:*", []string{"datasources:query"}},
 		{"query.grafana.app:create", []string{"datasources:query"}},
 		{"query.grafana.app:get", nil},
@@ -909,7 +919,7 @@ func TestRBACSync_DatasourceTokenPermissions(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				s := setupTestEnv(t)
-				for _, action := range allActions {
+				for _, action := range append(slices.Clone(allActions), alertingActions...) {
 					scope := "datasources:uid:"
 					if action == "datasources:create" {
 						scope = ""
@@ -919,7 +929,7 @@ func TestRBACSync_DatasourceTokenPermissions(t *testing.T) {
 				params := authn.FetchPermissionsParams{K8s: []string{tc.grant}}
 				if delegated {
 					params = authn.FetchPermissionsParams{
-						AllowedActions:       allActions,
+						AllowedActions:       append(slices.Clone(allActions), alertingActions...),
 						K8sRestrictedActions: []string{tc.grant},
 					}
 				}
