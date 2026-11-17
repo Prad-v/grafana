@@ -109,15 +109,10 @@ func TestMapperRegistry_DatasourceEnumeration(t *testing.T) {
 	for _, mapping := range mappings {
 		resources = append(resources, mapping.APIResource)
 	}
-	assert.ElementsMatch(t, []string{"datasources", "datasources/query", "datasources/caching"}, resources)
-
-	// Alerting subresources are only resolved explicitly, never through group enumeration.
-	for _, subresource := range []string{"alertrules", "alertinstances", "alertnotifications"} {
-		_, ok := reg.Get("datasource.grafana.app", "datasources", subresource)
-		assert.True(t, ok, subresource)
-		_, ok = reg.Get("loki.datasource.grafana.app", "datasources", subresource)
-		assert.True(t, ok, subresource)
-	}
+	assert.ElementsMatch(t, []string{
+		"datasources", "datasources/query", "datasources/caching",
+		"datasources/alertrules", "datasources/alertinstances", "datasources/alertnotifications",
+	}, resources)
 
 	// A plugin's own registered resources must not be replaced with shared datasource mappings.
 	reg.(mapper)["loki.datasource.grafana.app"] = map[string]translation{

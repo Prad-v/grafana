@@ -47,10 +47,6 @@ type translation struct {
 	// use this option if you need to limit access to users that can access all resources
 	useWildcardScope bool
 	skipWildcard     bool
-	// Keeps the translation out of group enumeration, so group-wide grants
-	// (e.g. "datasource.grafana.app:*") and delegation reverse lookups do not
-	// imply it. Get still resolves it for explicit checks.
-	excludeFromGroupGrants bool
 }
 
 func (t translation) Action(verb string) (string, bool) {
@@ -114,8 +110,7 @@ type MapperRegistry interface {
 	// GetAll returns all the translations for the given group
 	GetAll(group string) []Mapping
 	// ResourceMappings returns registered translations with their API resource names.
-	// Request aliases are resolved by Get, not included in this enumeration, and
-	// neither are translations excluded from group grants.
+	// Request aliases are resolved by Get, not included in this enumeration.
 	ResourceMappings(group string) []ResourceMapping
 	// GetGroups returns all registered group names
 	GetGroups() []string
@@ -789,7 +784,6 @@ func NewMapperRegistry() MapperRegistry {
 					utils.VerbGet:    accesscontrol.ActionAlertingRuleExternalRead,
 					utils.VerbUpdate: accesscontrol.ActionAlertingRuleExternalWrite,
 				},
-				excludeFromGroupGrants: true,
 			},
 			"datasources/alertinstances": translation{
 				resource:  "datasources",
@@ -798,7 +792,6 @@ func NewMapperRegistry() MapperRegistry {
 					utils.VerbGet:    accesscontrol.ActionAlertingInstancesExternalRead,
 					utils.VerbUpdate: accesscontrol.ActionAlertingInstancesExternalWrite,
 				},
-				excludeFromGroupGrants: true,
 			},
 			"datasources/alertnotifications": translation{
 				resource:  "datasources",
@@ -807,7 +800,6 @@ func NewMapperRegistry() MapperRegistry {
 					utils.VerbGet:    accesscontrol.ActionAlertingNotificationsExternalRead,
 					utils.VerbUpdate: accesscontrol.ActionAlertingNotificationsExternalWrite,
 				},
-				excludeFromGroupGrants: true,
 			},
 			// Only datasources:admin carries the caching actions.
 			"datasources/caching": translation{
@@ -904,9 +896,6 @@ func (m mapper) ResourceMappings(group string) []ResourceMapping {
 
 	mappings := make([]ResourceMapping, 0, len(resources))
 	for apiResource, t := range resources {
-		if t.excludeFromGroupGrants {
-			continue
-		}
 		mapping := t
 		mappings = append(mappings, ResourceMapping{
 			APIResource: apiResource,
