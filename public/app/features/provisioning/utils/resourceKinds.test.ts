@@ -2,7 +2,6 @@ import { HttpResponse, http } from 'msw';
 
 import server from '@grafana/test-utils/server';
 import { type SupportedResource } from 'app/api/clients/provisioning/v0alpha1';
-import { getIconForKind } from 'app/features/search/service/icons';
 
 import { setupProvisioningMswServer } from '../mocks/server';
 
@@ -52,7 +51,7 @@ describe('resourceKinds registry', () => {
       kind: 'DataSource',
       resource: 'datasources',
       itemType: 'DataSource',
-      collectionGroup: true,
+      collection: 'datasource.grafana.app',
     });
     expect(resourceKindInfos.repository).toMatchObject({
       group: 'provisioning.grafana.app',
@@ -86,20 +85,7 @@ describe('resourceKinds registry', () => {
     expect(await resourceKindInfos.connection.list()).toEqual([]);
   });
 
-  it('sources icons from the search package', () => {
-    expect(resourceKindInfos.dashboard.icon).toBe(getIconForKind('dashboard'));
-    expect(resourceKindInfos.folder.icon).toBe(getIconForKind('folder'));
-  });
-  it('gives each entry a `key` equal to its registry key', () => {
-    // The type only requires `key` to be some ResourceKindKey; this guards against an entry pointing
-    // at the wrong key (e.g. the playlist entry carrying `key: 'dashboard'`), which would silently
-    // mislabel commit messages and telemetry.
-    for (const [key, info] of Object.entries(resourceKindInfos)) {
-      expect(info.key).toBe(key);
-    }
-  });
-
-  it('returns a localized singular label for each kind', () => {
+  it('names each kind as it reads mid-sentence', () => {
     expect(resourceKindInfos.folder.getLabel()).toBe('folder');
     expect(resourceKindInfos.dashboard.getLabel()).toBe('dashboard');
     expect(resourceKindInfos.playlist.getLabel()).toBe('playlist');
@@ -109,7 +95,7 @@ describe('resourceKinds registry', () => {
 
   it('every kind exposes a translated plural label and a list function', () => {
     for (const info of Object.values(resourceKindInfos)) {
-      expect(info.pluralLabel()).toBeTruthy();
+      expect(info.getLabel({ plural: true })).toBeTruthy();
       expect(typeof info.list).toBe('function');
     }
   });
