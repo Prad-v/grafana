@@ -63,6 +63,11 @@ type staleHarness struct {
 	stale     []staleCall
 	failWrite bool
 	failStale bool
+	// staleErr is returned instead of a generic error while failStale is set.
+	staleErr      error
+	staleAttempts int
+	// peers share this harness' budget, so the budget counts their series too.
+	peers []*staleHarness
 
 	cancelParent context.CancelFunc
 }
@@ -89,7 +94,11 @@ func newStaleHarness(t *testing.T) *staleHarness {
 			return nil
 		},
 		WriteStaleFunc: func(ctx context.Context, dsUID, name string, ts time.Time, orgID int64, series []map[string]string) error {
+			h.staleAttempts++
 			if h.failStale {
+				if h.staleErr != nil {
+					return h.staleErr
+				}
 				return errors.New("stale write failed")
 			}
 			h.events = append(h.events, "stale")
@@ -114,6 +123,7 @@ func newStaleHarness(t *testing.T) *staleHarness {
 		metrics.NewNGAlert(prometheus.NewPedanticRegistry()).GetSchedulerMetrics(),
 		tracing.InitializeTracerForTest(),
 		&dsAgnosticWriter{FakeWriter: fake},
+		nil,
 		nil,
 		nil,
 	)
@@ -145,6 +155,7 @@ func (h *staleHarness) tick() time.Time {
 	h.t.Helper()
 	h.now = h.now.Add(time.Minute)
 	h.rule.doEvaluate(context.Background(), &Evaluation{scheduledAt: h.now, rule: h.model})
+	h.assertAccounting()
 	return h.now
 }
 
@@ -275,7 +286,7 @@ func TestRecordingRuleStaleMarkers(t *testing.T) {
 		require.Len(t, h.stale, 2)
 	})
 
-	t.Run("failed marker write does not fail the evaluation and is tried again", func(t *testing.T) {
+	t.Run("failed marker write does not fail the evaluation and is not retried", func(t *testing.T) {
 		h := newStaleHarness(t)
 		h.ev.resp = seriesResponse(a, b)
 		h.tick()
@@ -284,14 +295,15 @@ func TestRecordingRuleStaleMarkers(t *testing.T) {
 		h.failStale = true
 		h.tick()
 		require.Empty(t, h.stale)
+		require.Equal(t, 1, h.staleAttempts)
 		require.Equal(t, "ok", h.rule.Status().Health)
 		require.NoError(t, h.rule.Status().LastError)
 
 		h.failStale = false
-		ts := h.tick()
-		require.Len(t, h.stale, 1)
-		require.Equal(t, markerTime(ts), h.stale[0].t, "the retry uses the later tick, so it is never older than the series' last sample")
-		require.Equal(t, []map[string]string{withRuleLabels(b)}, h.staleSeries(0))
+		h.tick()
+		h.tick()
+		require.Empty(t, h.stale, "b was forgotten with the failed write")
+		require.Equal(t, 1, h.staleAttempts)
 	})
 
 	t.Run("failed marker write is dropped if the series came back", func(t *testing.T) {
