@@ -90,6 +90,41 @@ func TestAcquireTTLValidation(t *testing.T) {
 	}
 }
 
+func TestAcquireMaxClockSkew(t *testing.T) {
+	const ttl = 10 * time.Second
+	for _, tc := range []struct {
+		name     string
+		skew     time.Duration
+		ahead    time.Duration
+		wantHeld bool
+	}{
+		{name: "default tolerates 500ms", ahead: ttl + 400*time.Millisecond, wantHeld: true},
+		{name: "default expires after 500ms", ahead: ttl + 600*time.Millisecond, wantHeld: false},
+		{name: "configured tolerates more", skew: 2 * time.Second, ahead: ttl + 1500*time.Millisecond, wantHeld: true},
+		{name: "configured expires after skew", skew: 2 * time.Second, ahead: ttl + 2500*time.Millisecond, wantHeld: false},
+		{name: "non-positive keeps default", skew: -time.Second, ahead: ttl + 400*time.Millisecond, wantHeld: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newMapKV()
+			start := time.Now()
+			owner := lease.NewManager(store, "owner", "test", nil, lease.WithGarbageCollectionDisabled,
+				lease.WithInternalNowFunc(func() time.Time { return start }))
+			_, err := owner.Acquire(t.Context(), "skew", lease.WithTTL(ttl))
+			require.NoError(t, err)
+
+			// A host whose clock runs ahead sees the owner's lease as expired sooner.
+			other := lease.NewManager(store, "other", "test", nil, lease.WithGarbageCollectionDisabled,
+				lease.WithMaxClockSkew(tc.skew), lease.WithInternalNowFunc(func() time.Time { return start.Add(tc.ahead) }))
+			_, err = other.Acquire(t.Context(), "skew", lease.WithTTL(ttl))
+			if tc.wantHeld {
+				require.ErrorIs(t, err, lease.ErrLeaseAlreadyHeld)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // mapKV is a thread-safe, in-memory kv.KV implementation scoped to a single
 // section (the lease package's section). It is the minimum needed to
 // exercise the lease contract: Get, Keys, Save, and Batch (Create only). Any

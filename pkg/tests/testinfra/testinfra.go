@@ -829,6 +829,12 @@ func createGrafDir(t *testing.T, tmpDir string, opts GrafanaOpts) (string, strin
 		_, err = section.NewKey("enable_sqlkv_backend", "true")
 		require.NoError(t, err)
 	}
+	// Always written: test servers share the host clock with the test database,
+	// and checking it only adds a startup read and a goroutine per server.
+	unifiedStorageSect, err := getOrCreateSection("unified_storage")
+	require.NoError(t, err)
+	_, err = unifiedStorageSect.NewKey("clock_skew_check_interval", "0")
+	require.NoError(t, err)
 	// Always written so the defaults.ini default can't start an embedded server,
 	// bound to the fixed cluster_port, in every parallel test binary.
 	natsSect, err := getOrCreateSection("nats")

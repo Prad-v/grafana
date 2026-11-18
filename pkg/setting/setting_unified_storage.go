@@ -89,6 +89,8 @@ const (
 	QueryCacheConfigResource = "querycacheconfigs.querycaching.grafana.app"
 	minimumKVLeaseTTL        = 10 * time.Second
 	maximumKVLeaseTTL        = 10 * time.Minute
+	defaultMaxClockSkew      = 500 * time.Millisecond
+	maximumMaxClockSkew      = minimumKVLeaseTTL / 2
 )
 
 // MigratedUnifiedResources maps resources to a boolean indicating if migration is enabled by default
@@ -355,6 +357,18 @@ func (cfg *Cfg) setUnifiedStorageConfig() {
 	cfg.FastLatestKeyLookupEnabled = section.Key("fast_latest_key_lookup_enabled").MustBool(false)
 	cfg.ResourceVersionBatchTransactionTimeout = section.Key("resource_version_batch_transaction_timeout").MustDuration(5 * time.Second)
 	cfg.ResourceVersionMaxWait = section.Key("resource_version_max_wait").MustDuration(time.Second)
+	// Write leases and resource versions assume instances agree on the time
+	// within max_clock_skew; the clock skew check enforces it in HA mode.
+	cfg.MaxClockSkew = section.Key("max_clock_skew").MustDuration(defaultMaxClockSkew)
+	if cfg.MaxClockSkew <= 0 {
+		cfg.Logger.Warn("max_clock_skew must be positive, using the default", "configured", cfg.MaxClockSkew, "default", defaultMaxClockSkew)
+		cfg.MaxClockSkew = defaultMaxClockSkew
+	} else if cfg.MaxClockSkew > maximumMaxClockSkew {
+		cfg.Logger.Warn("max_clock_skew is above the maximum, overriding", "configured", cfg.MaxClockSkew, "maximum", maximumMaxClockSkew)
+		cfg.MaxClockSkew = maximumMaxClockSkew
+	}
+	cfg.ClockSkewCheckInterval = section.Key("clock_skew_check_interval").MustDuration(10 * time.Second)
+	cfg.ClockSkewWarnThreshold = section.Key("clock_skew_warn_threshold").MustDuration(100 * time.Millisecond)
 
 	// TTL for caching statusReader results in the dynamic dualwrite service. 0 = no expiration.
 	cfg.StorageModeCacheTTL = section.Key("storage_mode_cache_ttl").MustDuration(5 * time.Second)

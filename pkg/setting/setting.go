@@ -899,6 +899,11 @@ type Cfg struct {
 	// Default: 5 seconds, 0 or negative means no expiration.
 	StorageModeCacheTTL time.Duration
 
+	// MaxClockSkew is the clock skew the KV backend tolerates between instances.
+	MaxClockSkew           time.Duration
+	ClockSkewCheckInterval time.Duration
+	ClockSkewWarnThreshold time.Duration
+
 	EventRetentionPeriod time.Duration
 	EventPruningInterval time.Duration
 	SearchLookback       time.Duration

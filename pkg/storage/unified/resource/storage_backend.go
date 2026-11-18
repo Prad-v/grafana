@@ -125,6 +125,10 @@ type kvStorageBackend struct {
 	// leaseManager serializes writes per resource and bulk imports per collection.
 	leaseManager *lease.Manager
 
+	// clockSkew rejects writes while the local clock is too far from the
+	// database clock. nil when the check is disabled.
+	clockSkew *clockSkewChecker
+
 	// leaseTTL is the TTL applied when acquiring a write lease. Zero uses the
 	// lease package default.
 	leaseTTL time.Duration
@@ -158,6 +162,8 @@ type kvBackendMetrics struct {
 	ResourceVersionClockRegression    prometheus.Gauge
 	ResourceVersionOrderingRejections *prometheus.CounterVec
 	ResourceVersionWaitDuration       *prometheus.HistogramVec
+	ClockOffsetFromDatabase           prometheus.Gauge
+	ClockSkewRejectedWrites           prometheus.Counter
 }
 
 func newKVBackendMetrics(reg prometheus.Registerer) *kvBackendMetrics {
@@ -194,6 +200,14 @@ func newKVBackendMetrics(reg prometheus.Registerer) *kvBackendMetrics {
 		ResourceVersionClockRegression: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
 			Name: "grafana_storage_resource_version_clock_regression_seconds",
 			Help: "Wall-clock regression relative to the last emitted resource version, reset on successful generation.",
+		}),
+		ClockOffsetFromDatabase: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
+			Name: "grafana_storage_clock_offset_from_database_seconds",
+			Help: "Smallest offset of the local clock from the database clock consistent with the last clock skew check: positive when ahead, negative when behind. Zero when the clocks may agree or the check is disabled.",
+		}),
+		ClockSkewRejectedWrites: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "grafana_storage_clock_skew_rejected_writes_total",
+			Help: "Writes rejected because the local clock was too far from the database clock.",
 		}),
 		WriteConflicts: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
 			Name: "grafana_storage_server_write_conflicts_total",
@@ -374,6 +388,15 @@ type KVBackendOptions struct {
 	// FastLatestKeyLookup resolves latest-version reads with a single-row
 	// descending lookup instead of scanning the resource's history.
 	FastLatestKeyLookup bool
+
+	// MaxClockSkew is the clock skew tolerated between instances sharing the
+	// store, used by write leases and the clock skew check. Zero uses the
+	// lease package default.
+	MaxClockSkew time.Duration
+
+	// ClockSkewCheck rejects writes while the local clock is too far from the
+	// database clock.
+	ClockSkewCheck ClockSkewCheckConfig
 }
 
 // NewKVBackendOptions returns the options that come from Grafana's config. The
@@ -394,6 +417,7 @@ func NewKVBackendOptions(cfg *setting.Cfg) KVBackendOptions {
 		DashboardVersionsToKeep:   cfg.DashboardVersionsToKeep,
 		MigrationStatementTimeout: cfg.MigrationStatementTimeout,
 		FastLatestKeyLookup:       cfg.FastLatestKeyLookupEnabled,
+		MaxClockSkew:              cfg.MaxClockSkew,
 		TenantWatcherConfig:       NewTenantWatcherConfig(cfg),
 		TenantDeleterConfig:       NewTenantDeleterConfig(cfg),
 		// Callers that know better override this. Without a default, a wiring
@@ -409,6 +433,10 @@ func NewKVBackendOptions(cfg *setting.Cfg) KVBackendOptions {
 			BatchWait:        cfg.GarbageCollectionBatchWait,
 			MaxAge:           cfg.GarbageCollectionMaxAge,
 			DashboardsMaxAge: cfg.DashboardsGarbageCollectionMaxAge,
+		},
+		ClockSkewCheck: ClockSkewCheckConfig{
+			Interval:      cfg.ClockSkewCheckInterval,
+			WarnThreshold: cfg.ClockSkewWarnThreshold,
 		},
 	}
 }
@@ -467,7 +495,11 @@ func NewKVStorageBackend(opts KVBackendOptions) (KVBackend, error) {
 	if holder == "" {
 		holder = newLeaseHolder("")
 	}
-	leaseManager := lease.NewManager(kv, holder, "storage", opts.Reg)
+	maxClockSkew := opts.MaxClockSkew
+	if maxClockSkew <= 0 {
+		maxClockSkew = lease.DefaultMaxClockSkew
+	}
+	leaseManager := lease.NewManager(kv, holder, "storage", opts.Reg, lease.WithMaxClockSkew(maxClockSkew))
 
 	dataStore := newDataStore(kv)
 	dataStore.fastLatestKeyLookup = opts.FastLatestKeyLookup
@@ -527,6 +559,17 @@ func NewKVStorageBackend(opts KVBackendOptions) (KVBackend, error) {
 			cancel()
 			return nil, fmt.Errorf("failed to initialize garbage collection: %w", err)
 		}
+	}
+
+	if opts.ClockSkewCheck.Enabled && opts.ClockSkewCheck.Interval > 0 {
+		backend.clockSkew = newClockSkewChecker(opts.ClockSkewCheck, maxClockSkew, func(ctx context.Context) (time.Time, error) {
+			return readKVClock(ctx, kv)
+		}, logger.With("component", "clock-skew-check"), metrics)
+		// Check before serving so a skewed clock cannot write until the first tick.
+		backend.clockSkew.check(ctx)
+		go backend.clockSkew.run(ctx)
+		logger.Info("clock skew check enabled", "interval", opts.ClockSkewCheck.Interval.String(),
+			"warnThreshold", opts.ClockSkewCheck.WarnThreshold.String(), "maxOffset", backend.clockSkew.maxOffset.String())
 	}
 
 	// Optionally start the tenant watcher.
@@ -1225,6 +1268,10 @@ func (k *kvStorageBackend) WriteEvent(ctx context.Context, event WriteEvent) (rv
 	))
 	defer span.End()
 	defer func() { recordSpanError(span, err) }()
+
+	if err := k.clockSkew.checkWrite(); err != nil {
+		return 0, err
+	}
 
 	ctx, releaseLease, err := k.acquireWriteLease(ctx, event)
 	if err != nil {
