@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/grafana/grafana/pkg/setting"
 )
 
 func TestRemoteServiceFlag(t *testing.T) {
@@ -52,6 +54,48 @@ func TestRemoteServiceOptedIn(t *testing.T) {
 	require.False(t, remoteServiceOptedIn(ctx, "foo.ext.grafana.app"))
 	require.True(t, remoteServiceOptedIn(ctx, "features.grafana.app"))
 	require.True(t, remoteServiceOptedIn(ctx, "foo.example.com"))
+}
+
+func TestRemoteServiceEnabled(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "svc.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"- group: advisor.grafana.app\n  version: v0alpha1\n  host: mt\n  port: 443\n"+
+			"- group: nohost.grafana.app\n  version: v1\n"), 0o600))
+	withFile := func(p string) *setting.Cfg {
+		cfg := setting.NewCfg()
+		cfg.Raw.Section(remoteServicesSection).Key("remote_services_file").SetValue(p)
+		return cfg
+	}
+	on := func(context.Context, string) bool { return true }
+	off := func(context.Context, string) bool { return false }
+
+	tests := []struct {
+		name    string
+		cfg     *setting.Cfg
+		group   string
+		optedIn func(context.Context, string) bool
+		want    bool
+		wantErr bool
+	}{
+		{name: "listed and opted in", cfg: withFile(path), group: "advisor.grafana.app", optedIn: on, want: true},
+		{name: "listed but flag off", cfg: withFile(path), group: "advisor.grafana.app", optedIn: off},
+		{name: "not listed", cfg: withFile(path), group: "folder.grafana.app", optedIn: on},
+		{name: "listed without host", cfg: withFile(path), group: "nohost.grafana.app", optedIn: on},
+		{name: "no remote services file", cfg: setting.NewCfg(), group: "advisor.grafana.app", optedIn: on},
+		{name: "unreadable file", cfg: withFile(filepath.Join(t.TempDir(), "missing.yaml")), group: "advisor.grafana.app", optedIn: on, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := remoteServiceEnabled(ctx, tt.cfg, tt.group, tt.optedIn)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 type fakeBackendLoader struct {
