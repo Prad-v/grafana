@@ -88,7 +88,7 @@ function RecordingRulesBody({ hasIssues, mode, filter }: RecordingRulesBodyProps
     );
   }
   if (mode === 'folders') {
-    return <RecordingRulesFoldersView key={filter.folders.join()} folderUids={filter.folders} />;
+    return <RecordingRulesFoldersView key={filter.folder} folderName={filter.folder} />;
   }
   return <RecordingRulesListView filter={filter} />;
 }
