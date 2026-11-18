@@ -1,7 +1,8 @@
 import { type MutableRefObject, useEffect } from 'react';
 import { useAsync } from 'react-use';
 
-import { type DataSourceInstanceListItem } from '@grafana/data';
+import { createAssistantContextItem } from '@grafana/assistant';
+import { type DataSourceInstanceListItem, locationUtil } from '@grafana/data';
 import { t } from '@grafana/i18n';
 import { getBackendSrv, locationService } from '@grafana/runtime';
 import {
@@ -21,10 +22,11 @@ import {
   TemplateDashboardSourceEntryPoint,
 } from './constants';
 import { TemplateDashboardInteractions } from './interactions';
-import { type GnetDashboard, type GnetDashboardsResponse, type Link } from './types';
+import { type GnetDashboard, type GnetDashboardsResponse, type Link, type TemplateSelectionProps } from './types';
+import { buildTemplateContextData } from './utils/assistantHelpers';
 import { getTemplateDashboardUrl } from './utils/templateDashboardHelpers';
 
-interface GrafanaTemplatesTabProps {
+interface GrafanaTemplatesTabProps extends TemplateSelectionProps {
   /** Raw `source` search param value, mapped to a known entry point when fired. */
   entryPoint: string;
   testDataSource: DataSourceInstanceListItem | undefined;
@@ -42,6 +44,9 @@ export const GrafanaTemplatesTab = ({
   testDataSource,
   onClose,
   loadedFiredRef,
+  onSelectTemplate,
+  selectedTemplateId,
+  onTemplatesLoad,
 }: GrafanaTemplatesTabProps) => {
   const isDashboardTemplatesAssistantButtonEnabled = useFlagDashboardTemplatesAssistantButton();
   const isDashboardTemplatesAssistantToolEnabled = useFlagAssistantFrontendToolsDashboardTemplates();
@@ -84,6 +89,12 @@ export const GrafanaTemplatesTab = ({
       : TemplateDashboardInteractions.loaded(properties);
   }, [loading, dashboards, entryPoint, testDataSource?.type, isAnalyticsFrameworkEnabled, loadedFiredRef]);
 
+  useEffect(() => {
+    if (!loading) {
+      onTemplatesLoad?.(dashboards.length);
+    }
+  }, [loading, dashboards.length, onTemplatesLoad]);
+
   const onPreviewDashboardClick = async (dashboard: GnetDashboard, customizeWithAssistant = false) => {
     const sourceEntryPoint = DashboardTemplatesSourceEntryPointMap[entryPoint] || 'unknown';
     isAnalyticsFrameworkEnabled
@@ -117,12 +128,37 @@ export const GrafanaTemplatesTab = ({
     locationService.push(templateUrl);
   };
 
+  // A new tab keeps the landing, and its prompt, where the person left them.
+  const previewTemplate = (dashboard: GnetDashboard) => {
+    const sourceEntryPoint = DashboardTemplatesSourceEntryPointMap[entryPoint] || 'unknown';
+    const url = getTemplateDashboardUrl(dashboard, testDataSource, sourceEntryPoint);
+    window.open(locationUtil.assureBaseUrl(url), '_blank', 'noopener,noreferrer');
+  };
+
+  const selectTemplate = (dashboard: GnetDashboard) => {
+    onSelectTemplate?.({
+      id: getGrafanaTemplateSelectionId(dashboard),
+      title: dashboard.name,
+      kind: 'template_dashboard',
+      contextItem: createAssistantContextItem('structured', {
+        hidden: false,
+        // The prompt pill is narrow: a "Dashboard Template:" prefix leaves no room for the name.
+        title: dashboard.name,
+        data: buildTemplateContextData(dashboard, 'template_dashboard'),
+      }),
+    });
+  };
+
   // Without a test data source there is nothing to power the templates, so render nothing.
   if (!testDataSource) {
     return null;
   }
 
   if (!loading && dashboards.length === 0) {
+    // A picker shares one grid with other template sources, where an empty state would take a card's slot.
+    if (onSelectTemplate) {
+      return null;
+    }
     return (
       <EmptyState
         variant="not-found"
@@ -134,6 +170,34 @@ export const GrafanaTemplatesTab = ({
     );
   }
 
+  const cards = loading
+    ? Array.from({ length: 4 }).map((_, index) => <DashboardCard.Skeleton key={index} />)
+    : dashboards?.map((dashboard) => {
+        const thumbnail = dashboard.screenshots?.[0]?.links.find((l: Link) => l.rel === 'image')?.href ?? '';
+        const thumbnailUrl = thumbnail ? `/api/gnet${thumbnail}` : '';
+
+        return (
+          <DashboardCard
+            key={dashboard.id}
+            title={dashboard.name}
+            imageUrl={thumbnailUrl}
+            onClick={(customizeWithAssistant?: boolean) => onPreviewDashboardClick(dashboard, customizeWithAssistant)}
+            onClose={onClose}
+            dashboard={dashboard}
+            kind="template_dashboard"
+            showAssistantButton={isDashboardTemplatesAssistantButtonEnabled && isDashboardTemplatesAssistantToolEnabled}
+            onSelect={onSelectTemplate ? () => selectTemplate(dashboard) : undefined}
+            onPreview={onSelectTemplate ? () => previewTemplate(dashboard) : undefined}
+            selected={selectedTemplateId === getGrafanaTemplateSelectionId(dashboard)}
+          />
+        );
+      });
+
+  // A picker renders bare cards: the caller lays out every template source in one grid.
+  if (onSelectTemplate) {
+    return <>{cards}</>;
+  }
+
   return (
     <Grid
       gap={4}
@@ -143,29 +207,11 @@ export const GrafanaTemplatesTab = ({
         lg: 3,
       }}
     >
-      {loading
-        ? Array.from({ length: 4 }).map((_, index) => <DashboardCard.Skeleton key={index} />)
-        : dashboards?.map((dashboard) => {
-            const thumbnail = dashboard.screenshots?.[0]?.links.find((l: Link) => l.rel === 'image')?.href ?? '';
-            const thumbnailUrl = thumbnail ? `/api/gnet${thumbnail}` : '';
-
-            return (
-              <DashboardCard
-                key={dashboard.id}
-                title={dashboard.name}
-                imageUrl={thumbnailUrl}
-                onClick={(customizeWithAssistant?: boolean) =>
-                  onPreviewDashboardClick(dashboard, customizeWithAssistant)
-                }
-                onClose={onClose}
-                dashboard={dashboard}
-                kind="template_dashboard"
-                showAssistantButton={
-                  isDashboardTemplatesAssistantButtonEnabled && isDashboardTemplatesAssistantToolEnabled
-                }
-              />
-            );
-          })}
+      {cards}
     </Grid>
   );
 };
+
+function getGrafanaTemplateSelectionId(dashboard: GnetDashboard): string {
+  return `grafana:${dashboard.id}`;
+}

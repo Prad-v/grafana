@@ -1,0 +1,203 @@
+import { css, cx } from '@emotion/css';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+
+import { type DataSourceInstanceListItem, type GrafanaTheme2 } from '@grafana/data';
+import { Trans } from '@grafana/i18n';
+import { Grid, Icon, useStyles2 } from '@grafana/ui';
+import { getFocusStyles } from '@grafana/ui/internal';
+import { DashboardCard } from 'app/features/dashboard/dashgrid/DashboardLibrary/DashboardCard';
+import { GrafanaTemplatesTab } from 'app/features/dashboard/dashgrid/DashboardLibrary/GrafanaTemplatesTab';
+import { getDashboardTemplatesTab } from 'app/features/dashboard/dashgrid/DashboardLibrary/enterprise-components/DashboardTemplatesTabExtension';
+import { type TemplateSelection } from 'app/features/dashboard/dashgrid/DashboardLibrary/types';
+
+interface Props {
+  testDataSource: DataSourceInstanceListItem | undefined;
+  showGrafanaTemplates: boolean;
+  showCustomTemplates: boolean;
+  onSelectTemplate: (selection: TemplateSelection) => void;
+  selectedTemplateId?: string;
+  /** Keeps the panel out of view while its lists still load. */
+  hidden?: boolean;
+  className?: string;
+}
+
+const noop = () => {};
+
+const GRID_COLUMNS = { xs: 1, sm: 2, lg: 3 } as const;
+/** Two rows on a desktop, enough to fill the panel while the lists load. */
+const LOADING_CARDS = 6;
+/** How long the cards wait for every list before showing the ones that have loaded. */
+export const LOAD_WAIT_MS = 3000;
+
+/**
+ * The templates under the new-dashboard prompt: a collapsible panel holding one scrollable grid, the
+ * organization's custom templates first, then the Grafana-provisioned ones. Picking a card attaches it to the
+ * prompt instead of opening it. As pickers, both lists render bare cards, so they flow into this one grid.
+ */
+export function LandingTemplates({
+  testDataSource,
+  showGrafanaTemplates,
+  showCustomTemplates,
+  onSelectTemplate,
+  selectedTemplateId,
+  hidden,
+  className,
+}: Props) {
+  const styles = useStyles2(getStyles);
+  const titleId = useId();
+  const listId = useId();
+  // Undefined until each list reports how many templates it shows.
+  const [counts, setCounts] = useState<{ custom?: number; grafana?: number }>({});
+  // A person's own toggle wins over the default.
+  const [openedByUser, setOpenedByUser] = useState<boolean>();
+  const onCustomTemplatesLoad = useCallback((custom: number) => setCounts((current) => ({ ...current, custom })), []);
+  const onGrafanaTemplatesLoad = useCallback(
+    (grafana: number) => setCounts((current) => ({ ...current, grafana })),
+    []
+  );
+  const DashboardTemplatesTab = getDashboardTemplatesTab();
+  const hasCustomTemplates = Boolean(DashboardTemplatesTab) && showCustomTemplates;
+  const allLoaded =
+    (!hasCustomTemplates || counts.custom !== undefined) && (!showGrafanaTemplates || counts.grafana !== undefined);
+  const total = (counts.custom ?? 0) + (counts.grafana ?? 0);
+  // A list that never reports (an older enterprise build) must not hold back the cards the others loaded.
+  const [waitedLong, setWaitedLong] = useState(false);
+  useEffect(() => {
+    if (allLoaded) {
+      return;
+    }
+    const timeout = setTimeout(() => setWaitedLong(true), LOAD_WAIT_MS);
+    return () => clearTimeout(timeout);
+  }, [allLoaded]);
+  const loaded = allLoaded || (waitedLong && total > 0);
+  const isEmpty = allLoaded && total === 0;
+  // Open while the lists load and when they show templates; closed when there are none to show.
+  const isOpen = openedByUser ?? !isEmpty;
+  // Pre-set so the lists' `loaded` events, which report the template modal as their location, stay silent here.
+  const customLoadedFiredRef = useRef(true);
+  const grafanaLoadedFiredRef = useRef(true);
+
+  // Rendered through a function, as in the template modal: the tab is registered by the enterprise build.
+  const renderCustomTemplates = () => {
+    if (!DashboardTemplatesTab || !hasCustomTemplates) {
+      return null;
+    }
+    return (
+      <DashboardTemplatesTab
+        isOpen
+        onClose={noop}
+        loadedFiredRef={customLoadedFiredRef}
+        onSelectTemplate={onSelectTemplate}
+        selectedTemplateId={selectedTemplateId}
+        onTemplatesLoad={onCustomTemplatesLoad}
+      />
+    );
+  };
+
+  return (
+    <section
+      className={cx(styles.panel, !isOpen && styles.panelClosed, className)}
+      aria-labelledby={titleId}
+      hidden={hidden}
+    >
+      <button
+        type="button"
+        id={titleId}
+        className={styles.toggle}
+        aria-expanded={isOpen}
+        aria-controls={listId}
+        onClick={() => setOpenedByUser(!isOpen)}
+      >
+        <Trans i18nKey="dashboard.empty.templates-title">Start from a template</Trans>
+        <Icon name={isOpen ? 'angle-up' : 'angle-down'} />
+      </button>
+      {/* Hidden, not unmounted: reopening keeps the loaded templates instead of refetching them. */}
+      <div id={listId} className={styles.list} hidden={!isOpen}>
+        {isEmpty && (
+          <p className={styles.empty}>
+            <Trans i18nKey="dashboard.empty.templates-empty">No templates available</Trans>
+          </p>
+        )}
+        {!loaded && (
+          <Grid gap={2} columns={GRID_COLUMNS}>
+            {Array.from({ length: LOADING_CARDS }).map((_, index) => (
+              <DashboardCard.Skeleton key={index} fluid />
+            ))}
+          </Grid>
+        )}
+        {/* Shown once every list has loaded, so the cards arrive together instead of reflowing list by list. */}
+        <div hidden={!loaded}>
+          <Grid gap={2} columns={GRID_COLUMNS}>
+            {renderCustomTemplates()}
+            {showGrafanaTemplates && (
+              <GrafanaTemplatesTab
+                entryPoint=""
+                testDataSource={testDataSource}
+                onClose={noop}
+                loadedFiredRef={grafanaLoadedFiredRef}
+                onSelectTemplate={onSelectTemplate}
+                selectedTemplateId={selectedTemplateId}
+                onTemplatesLoad={onGrafanaTemplatesLoad}
+              />
+            )}
+          </Grid>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function getStyles(theme: GrafanaTheme2) {
+  return {
+    // Shrinks with the page and scrolls its grid, so the content below the panel stays in view.
+    panel: css({
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 0,
+      // Same side inset as the prompt's text, so the label and cards line up with it.
+      padding: theme.spacing(0, 1, 1),
+      background: theme.colors.background.secondary,
+      border: `1px solid ${theme.colors.border.weak}`,
+      borderRadius: theme.shape.radius.default,
+      '&[hidden]': {
+        display: 'none',
+      },
+    }),
+    // Closed, the header sits as far from the panel's bottom edge as from the prompt above it: the same inset
+    // the page leaves past the prompt's edge, since the header's own padding already applies on both sides.
+    panelClosed: css({
+      paddingBottom: theme.spacing(0.5),
+    }),
+    toggle: css({
+      alignSelf: 'flex-start',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: theme.spacing(0.5),
+      padding: theme.spacing(1, 0),
+      background: 'none',
+      border: 'none',
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em',
+      cursor: 'pointer',
+      '&:hover': {
+        color: theme.colors.text.primary,
+      },
+      '&:focus-visible': getFocusStyles(theme),
+    }),
+    list: css({
+      minHeight: 0,
+      overflowY: 'auto',
+      paddingTop: theme.spacing(0.5),
+      '&[hidden]': {
+        display: 'none',
+      },
+    }),
+    empty: css({
+      margin: 0,
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+    }),
+  };
+}

@@ -1,3 +1,4 @@
+import { type ChatContextItem } from '@grafana/assistant';
 import { type DashboardJson } from 'app/features/manage-dashboards/types';
 import { type PluginDashboard } from 'app/types/plugins';
 
@@ -55,4 +56,28 @@ export interface GnetDashboardsResponse {
  */
 export function isGnetDashboard(dashboard: PluginDashboard | GnetDashboard): dashboard is GnetDashboard {
   return !('importedRevision' in dashboard || 'importedUri' in dashboard || 'path' in dashboard);
+}
+
+/**
+ * A template picked to start a dashboard with the Assistant, instead of opened as a dashboard.
+ * The context item carries what the Assistant needs to build from it.
+ */
+export interface TemplateSelection {
+  /** Unique across Grafana-provisioned and custom templates. */
+  id: string;
+  title: string;
+  kind: 'template_dashboard' | 'custom_dashboard_template';
+  contextItem: ChatContextItem;
+}
+
+/**
+ * Turns template cards into a picker: clicking a card hands its template to the caller. A picker renders bare
+ * cards, without its own grid or empty state, so the caller can lay out several template sources in one grid.
+ */
+export interface TemplateSelectionProps {
+  onSelectTemplate?: (selection: TemplateSelection) => void;
+  /** The picked template's `TemplateSelection.id`, shown as selected. */
+  selectedTemplateId?: string;
+  /** Reports how many templates the list shows once they load, so the host can react to an empty list. */
+  onTemplatesLoad?: (count: number) => void;
 }

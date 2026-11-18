@@ -142,6 +142,121 @@ describe('DashboardCard', () => {
     });
   });
 
+  describe('Select mode', () => {
+    it('picks the card from its Use template action instead of opening it', async () => {
+      const onSelect = jest.fn();
+      const { user } = render(
+        <DashboardCard
+          title="RED metrics"
+          dashboard={createMockGnetDashboard()}
+          onClick={mockOnClick}
+          onSelect={onSelect}
+          kind="template_dashboard"
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Use template: RED metrics' }));
+
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(mockOnClick).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'View template: RED metrics' })).not.toBeInTheDocument();
+    });
+
+    it('picks the card only from its Use template action, as the template modal does', async () => {
+      const onSelect = jest.fn();
+      const { user } = render(
+        <DashboardCard
+          title="RED metrics"
+          dashboard={createMockGnetDashboard()}
+          onClick={mockOnClick}
+          onSelect={onSelect}
+          kind="template_dashboard"
+        />
+      );
+
+      await user.click(screen.getByText('RED metrics'));
+
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('reports the selected card as pressed', () => {
+      render(
+        <DashboardCard
+          title="RED metrics"
+          dashboard={createMockGnetDashboard()}
+          onClick={mockOnClick}
+          onSelect={jest.fn()}
+          selected
+          kind="template_dashboard"
+        />
+      );
+
+      expect(screen.getByRole('button', { name: 'Use template: RED metrics' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('offers Preview next to Use template when the caller can preview', async () => {
+      const onPreview = jest.fn();
+      const onSelect = jest.fn();
+      const { user } = render(
+        <DashboardCard
+          title="RED metrics"
+          dashboard={createMockGnetDashboard()}
+          onClick={mockOnClick}
+          onSelect={onSelect}
+          onPreview={onPreview}
+          kind="template_dashboard"
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Preview template: RED metrics' }));
+
+      expect(onPreview).toHaveBeenCalledTimes(1);
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('has no Preview action without a preview handler', () => {
+      render(
+        <DashboardCard
+          title="RED metrics"
+          dashboard={createMockGnetDashboard()}
+          onClick={mockOnClick}
+          onSelect={jest.fn()}
+          kind="template_dashboard"
+        />
+      );
+
+      expect(screen.queryByRole('button', { name: 'Preview template: RED metrics' })).not.toBeInTheDocument();
+    });
+
+    it('says a Grafana template is provisioned by Grafana', () => {
+      render(
+        <DashboardCard
+          title="RED metrics"
+          dashboard={createMockGnetDashboard()}
+          onClick={mockOnClick}
+          onSelect={jest.fn()}
+          kind="template_dashboard"
+        />
+      );
+
+      expect(screen.getByText('Provisioned by').closest('p')).toHaveTextContent('Provisioned by Grafana');
+    });
+
+    it('keeps the template modal card unchanged', () => {
+      render(
+        <DashboardCard
+          title="RED metrics"
+          dashboard={createMockGnetDashboard()}
+          onClick={mockOnClick}
+          kind="template_dashboard"
+        />
+      );
+
+      expect(screen.queryByText('Provisioned by Grafana')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'View template: RED metrics' })).toBeInTheDocument();
+    });
+  });
+
   describe('Badge display', () => {
     it('should show datasource-provided badge when flag is true', () => {
       render(
