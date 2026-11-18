@@ -18,7 +18,7 @@ This topic includes instructions for starting the Grafana server. For certain co
 
 The following instructions start the `grafana-server` process as the `grafana` user, which was created during the package installation.
 
-If you installed with the APT repository or `.deb` package, then you can start the server using `systemd` or `init.d`. If you installed a binary `.tar.gz` file, then you execute the binary.
+The Debian package includes a `systemd` service and an `init.d` script for SysV systems. Follow the instructions for your init system. If you installed from a `.tar.gz` file, run the binary directly.
 
 ## Linux
 
@@ -83,10 +83,10 @@ Complete the following steps to start the Grafana server using init.d and verify
 
 ### Configure the Grafana server to start at boot using init.d
 
-To configure the Grafana server to start at boot, run the following command:
+The Debian package disables startup at boot by default on SysV systems. To enable it, run the following command:
 
 ```bash
-sudo update-rc.d grafana-server defaults
+sudo update-rc.d grafana-server enable
 ```
 
 #### Restart the Grafana server using init.d

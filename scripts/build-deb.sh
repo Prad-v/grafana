@@ -67,6 +67,7 @@ mkdir -p \
   "${PKG}/usr/share" \
   "${PKG}/etc/default" \
   "${PKG}/etc/grafana" \
+  "${PKG}/etc/init.d" \
   "${PKG}/usr/lib/systemd/system"
 
 # Wrapper scripts for the unified grafana binary.
@@ -87,6 +88,7 @@ cp -r "${SRC}" "${PKG}/usr/share/grafana"
 # Copy deb-specific config files (matches artifacts/package_deb.go ConfigFiles).
 cp "${SRC}/packaging/deb/default/grafana-server"              "${PKG}/etc/default/grafana-server"
 cp "${SRC}/packaging/deb/systemd/grafana-server.service"      "${PKG}/usr/lib/systemd/system/grafana-server.service"
+install -m 0755 "${SRC}/packaging/deb/init.d/grafana-server"   "${PKG}/etc/init.d/grafana-server"
 chmod 0644 "${PKG}/etc/default/grafana-server"
 
 FILENAME="${DEB_PACKAGE_NAME}_${BUILD_VERSION}_${BUILD_NUMBER}_${OS}_${ARCH_LABEL}.deb"
@@ -103,11 +105,11 @@ fpm \
   --version="${DEB_VERSION}" \
   --package="${REPO_ROOT}/dist/${FILENAME}" \
   --config-files=/etc/default/grafana-server \
+  --config-files=/etc/init.d/grafana-server \
   --config-files=/usr/lib/systemd/system/grafana-server.service \
   --after-install="${SRC}/packaging/deb/control/postinst" \
   --before-remove="${SRC}/packaging/deb/control/prerm" \
   --depends=adduser \
-  --depends=systemd \
   --architecture="${PKG_ARCH}" \
   --description=Grafana \
   --license="${FPM_LICENSE:-AGPLv3}" \
