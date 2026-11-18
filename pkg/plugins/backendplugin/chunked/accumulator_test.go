@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,4 +63,17 @@ func TestAccumulator(t *testing.T) {
 			}
 		}
 	}`, string(out))
+}
+
+func TestAccumulatorErrorStatus(t *testing.T) {
+	rsp, err := AccumulateJSONLines(strings.NewReader(`
+	 {"refId":"A","status":401,"error":"unauthorized","errorSource":"downstream"}
+	`))
+	require.NoError(t, err)
+	require.Equal(t, backend.StatusUnauthorized, rsp.Responses["A"].Status)
+	require.EqualError(t, rsp.Responses["A"].Error, "unauthorized")
+	require.Equal(t, backend.ErrorSourceDownstream, rsp.Responses["A"].ErrorSource)
+
+	_, err = AccumulateJSONLines(strings.NewReader(`{"refId":"A","status":"bad"}`))
+	require.ErrorContains(t, err, "expected number")
 }
