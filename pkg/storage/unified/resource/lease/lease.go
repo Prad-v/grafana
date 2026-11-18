@@ -31,9 +31,9 @@ const (
 	// max TTL accepted
 	maxTTL = 10 * time.Minute
 
-	// maximum tolerated clock skew across hosts when deciding whether an
-	// existing lease is still held by another process.
-	defaultMaxClockSkew = 500 * time.Millisecond
+	// DefaultMaxClockSkew is the clock skew tolerated across hosts when
+	// deciding whether an existing lease is still held by another process.
+	DefaultMaxClockSkew = 500 * time.Millisecond
 
 	// maximum number of times an Acquire() call will loop to ensure a lease
 	// is already acquired when it cannot create a unique key.
@@ -146,7 +146,7 @@ func NewManager(store kv.KV, holder string, component string, reg prometheus.Reg
 		store:        store,
 		holder:       holder,
 		minTTL:       defaultMinTTL,
-		maxClockSkew: defaultMaxClockSkew,
+		maxClockSkew: DefaultMaxClockSkew,
 		log:          logging.DefaultLogger.With("logger", "lease-manager"),
 		now:          time.Now,
 		metrics:      NewMetrics(reg, component),
@@ -178,6 +178,16 @@ func WithInternalMinTTL(d time.Duration) ManagerOption {
 	return func(m *Manager) {
 		m.minTTL = d
 		m.maxClockSkew = 0
+	}
+}
+
+// WithMaxClockSkew sets the clock skew tolerated between hosts when deciding
+// whether another host's lease has expired. Non-positive values keep the default.
+func WithMaxClockSkew(d time.Duration) ManagerOption {
+	return func(m *Manager) {
+		if d > 0 {
+			m.maxClockSkew = d
+		}
 	}
 }
 

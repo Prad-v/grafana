@@ -264,6 +264,45 @@ func TestResourceVersionMaxWait(t *testing.T) {
 	}
 }
 
+func TestClockSkewSettings(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		cfg := NewCfg()
+		cfg.setUnifiedStorageConfig()
+		require.Equal(t, 500*time.Millisecond, cfg.MaxClockSkew)
+		require.Equal(t, 10*time.Second, cfg.ClockSkewCheckInterval)
+		require.Equal(t, 100*time.Millisecond, cfg.ClockSkewWarnThreshold)
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		cfg := NewCfg()
+		section := cfg.Raw.Section("unified_storage")
+		section.Key("max_clock_skew").SetValue("2s")
+		section.Key("clock_skew_check_interval").SetValue("0s")
+		section.Key("clock_skew_warn_threshold").SetValue("1s")
+		cfg.setUnifiedStorageConfig()
+		require.Equal(t, 2*time.Second, cfg.MaxClockSkew)
+		require.Zero(t, cfg.ClockSkewCheckInterval)
+		require.Equal(t, time.Second, cfg.ClockSkewWarnThreshold)
+	})
+
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{value: "0s", want: 500 * time.Millisecond},
+		{value: "-1s", want: 500 * time.Millisecond},
+		{value: "5s", want: 5 * time.Second},
+		{value: "6s", want: 5 * time.Second},
+	} {
+		t.Run("max_clock_skew "+tc.value, func(t *testing.T) {
+			cfg := NewCfg()
+			cfg.Raw.Section("unified_storage").Key("max_clock_skew").SetValue(tc.value)
+			cfg.setUnifiedStorageConfig()
+			require.Equal(t, tc.want, cfg.MaxClockSkew)
+		})
+	}
+}
+
 func TestKVLeaseTTLBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

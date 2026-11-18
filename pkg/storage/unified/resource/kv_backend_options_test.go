@@ -22,6 +22,7 @@ var callerSuppliedFields = map[string]string{
 	"ReconcileKeyPaths":         "SQL history repair injected only by the SQL backend wiring",
 	"GCGate":                    "shared with the caller's startup sequencing",
 	"UseChannelNotifier":        "derived from high-availability detection, not from a single setting",
+	"ClockSkewCheck.Enabled":    "derived from high-availability detection, not from a single setting",
 	"EventPublisher":            "NATS publisher injected by the caller",
 	"WatchNotificationMetadata": "set together with EventPublisher by the caller",
 	"WatchInvalidator":          "shared watch invalidation injected by the caller",
@@ -143,6 +144,9 @@ func TestNewKVBackendOptionsValues(t *testing.T) {
 	cfg.DashboardsGarbageCollectionMaxAge = 9 * time.Minute
 	cfg.KVLeaseTTL = 9 * time.Minute
 	cfg.FastLatestKeyLookupEnabled = true
+	cfg.MaxClockSkew = 2 * time.Second
+	cfg.ClockSkewCheckInterval = 10 * time.Minute
+	cfg.ClockSkewWarnThreshold = 11 * time.Minute
 
 	opts := NewKVBackendOptions(cfg)
 
@@ -155,6 +159,11 @@ func TestNewKVBackendOptionsValues(t *testing.T) {
 	require.NotEmpty(t, opts.Holder)
 	require.Equal(t, 9*time.Minute, opts.LeaseTTL)
 	require.True(t, opts.FastLatestKeyLookup)
+	require.Equal(t, 2*time.Second, opts.MaxClockSkew)
+	require.Equal(t, ClockSkewCheckConfig{
+		Interval:      10 * time.Minute,
+		WarnThreshold: 11 * time.Minute,
+	}, opts.ClockSkewCheck)
 	require.Equal(t, GarbageCollectionConfig{
 		Enabled:          true,
 		DryRun:           true,
