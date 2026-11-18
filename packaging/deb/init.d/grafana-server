@@ -1,0 +1,109 @@
+#!/bin/bash
+
+### BEGIN INIT INFO
+# Provides:          grafana-server
+# Required-Start:    $remote_fs $network
+# Required-Stop:     $remote_fs $network
+# Should-Start:      postgresql mariadb mysql influxdb
+# Should-Stop:       postgresql mariadb mysql influxdb
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Grafana server
+### END INIT INFO
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+umask 027
+
+# The LSB hooks can redirect direct init script calls to the native systemd unit.
+if [ -r /lib/lsb/init-functions ]; then
+  . /lib/lsb/init-functions
+fi
+if [ -r /etc/default/grafana-server ]; then
+  set -a
+  . /etc/default/grafana-server
+  set +a
+fi
+
+GRAFANA_USER=${GRAFANA_USER:-grafana}
+GRAFANA_GROUP=${GRAFANA_GROUP:-grafana}
+GRAFANA_HOME=${GRAFANA_HOME:-/usr/share/grafana}
+DATA_DIR=${DATA_DIR:-/var/lib/grafana}
+LOG_DIR=${LOG_DIR:-/var/log/grafana}
+PLUGINS_DIR=${PLUGINS_DIR:-/var/lib/grafana/plugins}
+CONF_FILE=${CONF_FILE:-/etc/grafana/grafana.ini}
+PROVISIONING_CFG_DIR=${PROVISIONING_CFG_DIR:-/etc/grafana/provisioning}
+
+DAEMON="$GRAFANA_HOME/bin/grafana"
+# Keep the SysV PID file location so upgrades can find an already-running server.
+PID_FILE=/run/grafana-server.pid
+
+control_daemon() {
+  # The daemon must not inherit the lifecycle lock.
+  start-stop-daemon --pidfile "$PID_FILE" --name grafana --user "$GRAFANA_USER" "$@" 9>&-
+}
+
+start_grafana() {
+  if control_daemon --status; then
+    return 0
+  fi
+
+  if [ ! -x "$DAEMON" ]; then
+    printf '%s\n' "$DAEMON is missing or not executable" >&2
+    return 5
+  fi
+
+  export PLUGIN_UNIX_SOCKET_DIR=/run/grafana
+  install -d -m 0750 -o "$GRAFANA_USER" -g "$GRAFANA_GROUP" "$PLUGIN_UNIX_SOCKET_DIR" || return
+  ulimit -n "${MAX_OPEN_FILES:-10000}" || return
+
+  if control_daemon --start --oknodo --background --make-pidfile \
+    --notify-await --notify-timeout "${GRAFANA_STARTUP_TIMEOUT:-60}" \
+    --startas "$DAEMON" --chdir "$GRAFANA_HOME" --chuid "$GRAFANA_USER:$GRAFANA_GROUP" -- \
+    server --config="$CONF_FILE" --packaging=deb \
+    "cfg:default.paths.data=$DATA_DIR" \
+    "cfg:default.paths.logs=$LOG_DIR" \
+    "cfg:default.paths.plugins=$PLUGINS_DIR" \
+    "cfg:default.paths.bundled_plugins=$DATA_DIR/plugins-bundled" \
+    "cfg:default.paths.provisioning=$PROVISIONING_CFG_DIR"; then
+    return 0
+  fi
+
+  # A readiness timeout must allow migrations and provisioning to finish.
+  if control_daemon --status; then
+    printf 'Grafana is still running in the background\n' >&2
+    return 0
+  fi
+
+  printf 'Grafana did not complete startup\n' >&2
+  return 1
+}
+
+stop_grafana() {
+  control_daemon --stop --oknodo --retry=TERM/20/KILL/5 --remove-pidfile
+}
+
+case "${1:-}" in
+  start|stop|restart|force-reload)
+    exec 9>>/run/grafana-server.lock || exit 1
+    flock 9 || exit 1
+    ;;
+esac
+
+case "${1:-}" in
+  start) start_grafana ;;
+  stop) stop_grafana ;;
+  restart|force-reload) stop_grafana && start_grafana ;;
+  status)
+    if control_daemon --status; then
+      printf 'Grafana is running\n'
+    else
+      status=$?
+      printf 'Grafana is stopped\n' >&2
+      exit "$status"
+    fi
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|force-reload|status}" >&2
+    exit 2
+    ;;
+esac

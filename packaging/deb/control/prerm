@@ -3,15 +3,15 @@
 if [ "$1" = 'remove' ]
 then
   echo 'Stopping and disabling grafana-server service...'
-  if command -v systemctl >/dev/null; then
+  if [ -d /run/systemd/system ] && command -v systemctl >/dev/null; then
     systemctl stop grafana-server || true
-    systemctl disable grafana-server || true
   elif [ -x '/etc/init.d/grafana-server' ]; then
-    if command -v invoke-rc.d >/dev/null; then
-      invoke-rc.d grafana-server stop || true
-      update-rc.d -f grafana-server remove || true
-    else
-      /etc/init.d/grafana-server stop || true
-    fi
+    invoke-rc.d grafana-server stop || true
+  fi
+  if command -v systemctl >/dev/null; then
+    systemctl disable grafana-server || true
+  fi
+  if [ -x /etc/init.d/grafana-server ]; then
+    update-rc.d -f grafana-server remove || true
   fi
 fi
