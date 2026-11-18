@@ -1567,6 +1567,8 @@ func TestIntegrationService_getConnections(t *testing.T) {
 		Name:  "CCC",
 		UID:   "ccc",
 		Type:  "test",
+
+		ReadOnly: true,
 	})
 	require.NoError(t, err)
 
