@@ -64,12 +64,17 @@ func newTestClockSkewChecker(t *testing.T, cfg ClockSkewCheckConfig, read func(c
 	return newClockSkewChecker(cfg, 500*time.Millisecond, read, logger, metrics), logger, metrics
 }
 
+// readingNow is a reading of offset taken at the current instant.
+func readingNow(offset time.Duration) *clockReading {
+	return &clockReading{offset: offset, wall: time.Now().Round(0), mono: time.Now()}
+}
+
 func TestClockSkewCheckerRecord(t *testing.T) {
 	cfg := ClockSkewCheckConfig{Enabled: true, Interval: time.Second, WarnThreshold: 100 * time.Millisecond}
 
 	t.Run("within tolerance", func(t *testing.T) {
 		c, logger, metrics := newTestClockSkewChecker(t, cfg, nil)
-		c.record(-50 * time.Millisecond)
+		c.record(readingNow(-50 * time.Millisecond))
 
 		require.NoError(t, c.checkWrite())
 		require.Zero(t, logger.WarnLogs.Calls)
@@ -80,7 +85,7 @@ func TestClockSkewCheckerRecord(t *testing.T) {
 	for _, offset := range []time.Duration{-200 * time.Millisecond, 200 * time.Millisecond} {
 		t.Run("warns at "+offset.String(), func(t *testing.T) {
 			c, logger, _ := newTestClockSkewChecker(t, cfg, nil)
-			c.record(offset)
+			c.record(readingNow(offset))
 
 			require.NoError(t, c.checkWrite())
 			require.Equal(t, 1, logger.WarnLogs.Calls)
@@ -92,14 +97,14 @@ func TestClockSkewCheckerRecord(t *testing.T) {
 	// sides, are the full tolerated skew apart.
 	t.Run("accepts writes at half the tolerated skew", func(t *testing.T) {
 		c, _, _ := newTestClockSkewChecker(t, cfg, nil)
-		c.record(250 * time.Millisecond)
+		c.record(readingNow(250 * time.Millisecond))
 		require.NoError(t, c.checkWrite())
 	})
 
 	for _, offset := range []time.Duration{-300 * time.Millisecond, 300 * time.Millisecond} {
 		t.Run("rejects writes and recovers at "+offset.String(), func(t *testing.T) {
 			c, logger, metrics := newTestClockSkewChecker(t, cfg, nil)
-			c.record(offset)
+			c.record(readingNow(offset))
 
 			err := c.checkWrite()
 			require.True(t, apierrors.IsServiceUnavailable(err), "got %v", err)
@@ -109,7 +114,7 @@ func TestClockSkewCheckerRecord(t *testing.T) {
 			require.Equal(t, 1, logger.ErrorLogs.Calls)
 			require.Equal(t, 1.0, testutil.ToFloat64(metrics.ClockSkewRejectedWrites))
 
-			c.record(0)
+			c.record(readingNow(0))
 			require.NoError(t, c.checkWrite())
 			require.Equal(t, 1, logger.InfoLogs.Calls)
 		})
@@ -118,6 +123,86 @@ func TestClockSkewCheckerRecord(t *testing.T) {
 	t.Run("nil checker accepts writes", func(t *testing.T) {
 		var c *clockSkewChecker
 		require.NoError(t, c.checkWrite())
+	})
+}
+
+func TestClockSkewCheckerAcceptsWritesBeforeTheFirstCheck(t *testing.T) {
+	c, _, _ := newTestClockSkewChecker(t, ClockSkewCheckConfig{Enabled: true, Interval: time.Second}, nil)
+	require.NoError(t, c.checkWrite())
+}
+
+// jumpingChecker returns a checker whose wall clock is offset by jump from the
+// real one, against a database clock that is not.
+func jumpingChecker(t *testing.T, jump *atomic.Int64) (*clockSkewChecker, *fakeLogger) {
+	t.Helper()
+	cfg := ClockSkewCheckConfig{Enabled: true, Interval: time.Hour}
+	c, logger, _ := newTestClockSkewChecker(t, cfg, func(context.Context) (time.Time, error) {
+		return time.Now(), nil
+	})
+	c.wallNow = func() time.Time { return time.Now().Round(0).Add(time.Duration(jump.Load())) }
+	return c, logger
+}
+
+func TestClockSkewCheckerDetectsJumpsBetweenChecks(t *testing.T) {
+	for _, jumpBy := range []time.Duration{79 * 24 * time.Hour, -time.Hour} {
+		t.Run(jumpBy.String(), func(t *testing.T) {
+			var jump atomic.Int64
+			c, logger := jumpingChecker(t, &jump)
+			c.check(t.Context())
+			require.NoError(t, c.checkWrite())
+
+			jump.Store(int64(jumpBy))
+			err := c.checkWrite()
+			require.True(t, apierrors.IsServiceUnavailable(err), "got %v", err)
+			require.Equal(t, 1, logger.ErrorLogs.Calls)
+			require.Len(t, c.recheck, 1, "a jump asks for a check against the database")
+
+			// Later writes keep failing without logging the transition again.
+			require.Error(t, c.checkWrite())
+			require.Equal(t, 1, logger.ErrorLogs.Calls)
+
+			jump.Store(0)
+			require.NoError(t, c.checkWrite())
+			require.Equal(t, 1, logger.InfoLogs.Calls)
+		})
+	}
+}
+
+func TestClockSkewCheckerAcceptsAJumpThatFixesTheClock(t *testing.T) {
+	var jump atomic.Int64
+	jump.Store(int64(time.Hour))
+	c, _ := jumpingChecker(t, &jump)
+	c.check(t.Context())
+	require.Error(t, c.checkWrite())
+
+	// Time synchronization steps the clock back to the database's.
+	jump.Store(0)
+	require.NoError(t, c.checkWrite())
+}
+
+func TestClockSkewCheckerRechecksAfterAJump(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var jump atomic.Int64
+		var reads atomic.Int32
+		c, _ := jumpingChecker(t, &jump)
+		read := c.readDBClock
+		c.readDBClock = func(ctx context.Context) (time.Time, error) {
+			reads.Add(1)
+			return read(ctx)
+		}
+		c.check(t.Context())
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go c.run(ctx)
+
+		jump.Store(int64(time.Hour))
+		require.Error(t, c.checkWrite())
+		synctest.Wait()
+		// The interval is an hour, so this read came from the jump.
+		require.Equal(t, int32(2), reads.Load())
+		// The lower bound allows for the database truncating to the millisecond.
+		require.InDelta(t, time.Hour, c.last.Load().offset, float64(time.Millisecond))
 	})
 }
 

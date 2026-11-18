@@ -53,25 +53,55 @@ func clockOffset(before, after, db time.Time) time.Duration {
 	return 0
 }
 
+// clockReading is the offset from the database measured at one instant, kept
+// with the local wall and monotonic clocks at that instant.
+type clockReading struct {
+	offset time.Duration
+	// wall has no monotonic reading, so Sub on it compares wall clocks.
+	wall time.Time
+	mono time.Time
+}
+
+// estimate returns the current offset from the database. A step of the wall
+// clock since the reading moves wall time but not monotonic time, so the
+// difference between the two is how far the clock jumped.
+//
+// The monotonic clock also stops while the host is suspended, so a resumed
+// host looks like it jumped ahead until the next check measures it again.
+func (r *clockReading) estimate(wall time.Time) time.Duration {
+	return r.offset + wall.Sub(r.wall) - time.Since(r.mono)
+}
+
 type clockSkewChecker struct {
 	cfg            ClockSkewCheckConfig
 	maxOffset      time.Duration
 	readDBClock    func(context.Context) (time.Time, error)
+	wallNow        func() time.Time
 	log            logging.Logger
 	offsetGauge    prometheus.Gauge
 	rejectedWrites prometheus.Counter
 
+	// last is nil until the first successful check.
+	last atomic.Pointer[clockReading]
+	// rejecting only tracks the state for logging transitions; writes are
+	// decided from last on every call.
 	rejecting atomic.Bool
+	// recheck asks run to measure again without waiting for the next tick.
+	recheck chan struct{}
 }
 
 func newClockSkewChecker(cfg ClockSkewCheckConfig, maxClockSkew time.Duration, readDBClock func(context.Context) (time.Time, error), log logging.Logger, metrics *kvBackendMetrics) *clockSkewChecker {
 	return &clockSkewChecker{
-		cfg:            cfg,
-		maxOffset:      maxClockSkew / 2,
-		readDBClock:    readDBClock,
+		cfg:         cfg,
+		maxOffset:   maxClockSkew / 2,
+		readDBClock: readDBClock,
+		// Round(0) drops the monotonic reading, which Sub would otherwise
+		// prefer over the wall clock.
+		wallNow:        func() time.Time { return time.Now().Round(0) },
 		log:            log,
 		offsetGauge:    metrics.ClockOffsetFromDatabase,
 		rejectedWrites: metrics.ClockSkewRejectedWrites,
+		recheck:        make(chan struct{}, 1),
 	}
 }
 
@@ -84,7 +114,16 @@ func (c *clockSkewChecker) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			c.check(ctx)
+		case <-c.recheck:
+			c.check(ctx)
 		}
+	}
+}
+
+func (c *clockSkewChecker) requestCheck() {
+	select {
+	case c.recheck <- struct{}{}:
+	default:
 	}
 }
 
@@ -92,9 +131,10 @@ func (c *clockSkewChecker) check(ctx context.Context) {
 	readCtx, cancel := context.WithTimeout(ctx, clockSkewCheckTimeout)
 	defer cancel()
 
-	before := time.Now()
+	before := c.wallNow()
 	dbNow, err := c.readDBClock(readCtx)
-	after := time.Now()
+	after := c.wallNow()
+	mono := time.Now()
 	if err != nil {
 		if ctx.Err() == nil {
 			// Keep the last result: writes fail anyway while the database is unreachable.
@@ -102,10 +142,12 @@ func (c *clockSkewChecker) check(ctx context.Context) {
 		}
 		return
 	}
-	c.record(clockOffset(before, after, dbNow))
+	c.record(&clockReading{offset: clockOffset(before, after, dbNow), wall: after, mono: mono})
 }
 
-func (c *clockSkewChecker) record(offset time.Duration) {
+func (c *clockSkewChecker) record(reading *clockReading) {
+	c.last.Store(reading)
+	offset := reading.offset
 	c.offsetGauge.Set(offset.Seconds())
 
 	magnitude, direction := offsetMagnitude(offset)
@@ -133,9 +175,31 @@ func offsetMagnitude(offset time.Duration) (time.Duration, string) {
 }
 
 // checkWrite returns an error while the clock is too far from the database clock.
+// It extrapolates from the last check, so a clock that jumps between checks
+// stops writes right away instead of on the next tick.
 // The message reaches API clients, so the offset and limits stay in the checker's logs.
 func (c *clockSkewChecker) checkWrite() error {
-	if c == nil || !c.rejecting.Load() {
+	if c == nil {
+		return nil
+	}
+	last := c.last.Load()
+	if last == nil {
+		return nil
+	}
+	magnitude, direction := offsetMagnitude(last.estimate(c.wallNow()))
+	tooFar := magnitude > c.maxOffset
+	if c.rejecting.CompareAndSwap(!tooFar, tooFar) {
+		if tooFar {
+			c.log.Error("Clock moved since the last clock skew check, rejecting writes",
+				"offset", magnitude.String(), "direction", direction, "maxOffset", c.maxOffset.String())
+		} else {
+			c.log.Info("Clock moved back within the allowed offset from the database clock, accepting writes",
+				"offset", magnitude.String(), "direction", direction)
+		}
+		// Confirm against the database instead of trusting the estimate until the next tick.
+		c.requestCheck()
+	}
+	if !tooFar {
 		return nil
 	}
 	c.rejectedWrites.Inc()
