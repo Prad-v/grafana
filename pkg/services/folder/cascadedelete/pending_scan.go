@@ -89,6 +89,8 @@ func (c *Controller) reconcilePending(ctx context.Context, key string) error {
 	}
 	f, err := c.folders.Get(ctx, namespace, entry.Spec.FolderName)
 	if apierrors.IsNotFound(err) || (err == nil && string(f.UID) != entry.Spec.FolderUID) {
+		// Observation is best effort: a crash or conditional cleanup retry may lose or duplicate a sample.
+		c.pendingMetrics.completed(entry)
 		err = c.pending.Remove(ctx, entry)
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -143,6 +145,9 @@ func withPendingCaptureBudget(ctx context.Context, capture func(context.Context)
 	go func() { done <- capture(ctx) }()
 	select {
 	case err := <-done:
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
