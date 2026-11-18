@@ -1,0 +1,162 @@
+import { getBackendSrv } from '@grafana/runtime';
+
+import { type Signal, requireDataSource } from '../dataSources';
+
+type Params = Record<string, string | number>;
+
+// Each call resolves the data source the user chose for its signal, so a change in the URL applies to the next query.
+async function get<T>(signal: Signal, path: string, params?: Params): Promise<T> {
+  const uid = await requireDataSource(signal);
+  return getBackendSrv().get<T>(`/api/datasources/proxy/uid/${uid}/${path}`, params, undefined, {
+    showErrorAlert: false,
+  });
+}
+
+interface PromResponse<R> {
+  data: { result: R[] };
+}
+
+interface PromInstantRow {
+  metric: Record<string, string>;
+  value: [number, string];
+}
+
+interface PromRangeRow {
+  metric: Record<string, string>;
+  values: Array<[number, string]>;
+}
+
+export interface InstantSample {
+  metric: Record<string, string>;
+  value: number;
+}
+
+export interface RangeSeries {
+  metric: Record<string, string>;
+  times: number[];
+  values: number[];
+}
+
+const toNumber = (raw: string) => Number(raw);
+
+export async function promInstant(query: string, time: number): Promise<InstantSample[]> {
+  const response = await get<PromResponse<PromInstantRow>>('metrics', 'api/v1/query', { query, time });
+  return response.data.result.map((row) => ({ metric: row.metric, value: toNumber(row.value[1]) }));
+}
+
+export async function promRange(query: string, start: number, end: number, step: number): Promise<RangeSeries[]> {
+  const response = await get<PromResponse<PromRangeRow>>('metrics', 'api/v1/query_range', {
+    query,
+    start,
+    end,
+    step,
+  });
+  return response.data.result.map((row) => ({
+    metric: row.metric,
+    times: row.values.map(([time]) => time),
+    values: row.values.map(([, v]) => toNumber(v)),
+  }));
+}
+
+interface LokiStream {
+  stream: Record<string, string>;
+  values: Array<[string, string]>;
+}
+
+interface LokiResponse<R> {
+  data: { result: R[] };
+}
+
+export interface LogEntry {
+  timeNs: string;
+  level: string;
+  line: string;
+}
+
+export async function lokiLogs(query: string, startSec: number, endSec: number, limit: number): Promise<LogEntry[]> {
+  const response = await get<LokiResponse<LokiStream>>('logs', 'loki/api/v1/query_range', {
+    query,
+    start: startSec * 1e9,
+    end: endSec * 1e9,
+    limit,
+    direction: 'backward',
+  });
+  return response.data.result.flatMap((stream) =>
+    stream.values.map(([timeNs, line]) => ({ timeNs, level: stream.stream.detected_level ?? '', line }))
+  );
+}
+
+export async function lokiCount(query: string, time: number): Promise<number> {
+  const response = await get<LokiResponse<PromInstantRow>>('logs', 'loki/api/v1/query', { query, time });
+  return response.data.result.reduce((sum, row) => sum + toNumber(row.value[1]), 0);
+}
+
+export async function lokiCountRange(query: string, start: number, end: number, step: number): Promise<number[]> {
+  const response = await get<LokiResponse<PromRangeRow>>('logs', 'loki/api/v1/query_range', {
+    query,
+    start: start * 1e9,
+    end: end * 1e9,
+    step,
+  });
+  const first = response.data.result[0];
+  return first ? first.values.map(([, v]) => toNumber(v)) : [];
+}
+
+export async function lokiLabelValues(label: string, startSec: number, endSec: number): Promise<string[]> {
+  const response = await get<{ data: string[] }>('logs', `loki/api/v1/label/${label}/values`, {
+    start: startSec * 1e9,
+    end: endSec * 1e9,
+  });
+  return response.data;
+}
+
+export interface TempoSearchHit {
+  traceID: string;
+  rootServiceName?: string;
+  rootTraceName?: string;
+  durationMs?: number;
+}
+
+export async function tempoSearch(q: string, startSec: number, endSec: number, limit: number) {
+  const response = await get<{ traces?: TempoSearchHit[] }>('traces', 'api/search', {
+    q,
+    start: startSec,
+    end: endSec,
+    limit,
+  });
+  return response.traces ?? [];
+}
+
+export async function tempoTagValues(tag: string, startSec: number, endSec: number): Promise<string[]> {
+  const response = await get<{ tagValues?: Array<{ value?: string }> }>('traces', `api/v2/search/tag/${tag}/values`, {
+    start: startSec,
+    end: endSec,
+  });
+  // Tempo's JSON leaves the value out of an entry whose value is empty, and an empty name names nothing.
+  return (response.tagValues ?? []).flatMap((entry) => (entry.value ? [entry.value] : []));
+}
+
+interface OtlpAttribute {
+  key: string;
+  value: { stringValue?: string };
+}
+
+export interface OtlpSpan {
+  spanId: string;
+  parentSpanId?: string;
+  name: string;
+  startTimeUnixNano: string;
+  endTimeUnixNano: string;
+  // Tempo returns the status as an object, with the code as a number or as its enum name. Spans with no status send {}.
+  status?: { code?: number | string };
+}
+
+export interface OtlpBatch {
+  resource: { attributes: OtlpAttribute[] };
+  scopeSpans: Array<{ spans: OtlpSpan[] }>;
+}
+
+export async function tempoTrace(traceId: string): Promise<OtlpBatch[]> {
+  const response = await get<{ batches?: OtlpBatch[] }>('traces', `api/traces/${traceId}`);
+  return response.batches ?? [];
+}

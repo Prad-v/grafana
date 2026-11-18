@@ -9016,6 +9016,150 @@
       "update": "Update"
     }
   },
+  "drilldown-datasources": {
+    "button": "Data sources",
+    "knowledgegraph": "Knowledge graph",
+    "logs": "Logs",
+    "metrics": "Metrics",
+    "modal-title": "Data sources",
+    "profiles": "Profiles",
+    "sql": "SQL",
+    "traces": "Traces"
+  },
+  "drilldown-real": {
+    "apps": {
+      "logs": "Logs",
+      "metrics": "Metrics",
+      "profiles": "Profiles",
+      "sql": "SQL",
+      "traces": "Traces"
+    },
+    "ask-row": {
+      "assistant-label": "Ask Grafana Assistant",
+      "assistant-placeholder": "Ask Grafana Assistant, for example: why is {{service}} slow?"
+    },
+    "data": {
+      "connect-pyroscope": "Connect a Pyroscope data source to see CPU and memory",
+      "connect-sql": "Connect a SQL data source to see business impact",
+      "error-logs": "Error logs",
+      "failed-orders": "Failed orders",
+      "kg-cause": "The knowledge graph reports {{insights}}. ",
+      "kg-hint-title": "{{name}} has {{total}} active insights",
+      "kg-hint-trend": "{{name}} insights",
+      "kg-partial": "Showing the first {{total}} Service entities. The knowledge graph holds more.",
+      "no-change": "No change in latency or errors so far",
+      "no-source": "No data source",
+      "no-span-metrics": "No {{metric}} series in the last {{minutes}} minutes",
+      "no-spans": "n/a",
+      "not-measured": "Not measured",
+      "not-measured-metrics": "Not measured: no span metrics for this scope",
+      "not-measured-spans": "Not measured: no span metrics for this scope",
+      "p95-latency": "p95 latency",
+      "profiles-not-queried": "A profiles data source is selected, but nothing queries it yet",
+      "slowest-span": "Slowest span",
+      "sql-not-queried": "A SQL data source is selected, but nothing queries it yet",
+      "top-function": "Top function"
+    },
+    "detection": {
+      "checking": "Checking…",
+      "graph-title": "{{service}} p95 latency",
+      "title": "Grafana Assistant is checking {{service}}",
+      "waiting": "Waiting"
+    },
+    "evidence": {
+      "amount": "amount",
+      "explore-traces": "Explore traces",
+      "failed-orders": "Failed orders",
+      "flame-graph": "Flame graph",
+      "impact-title": "Impact",
+      "log-lines": "Log lines",
+      "no-logs": "No logs in this time range.",
+      "no-profiles": "No profiles data source connected.",
+      "no-sql": "No SQL data source connected.",
+      "no-sql-queries": "No SQL data source connected.",
+      "no-trace": "No trace found in this time range.",
+      "open-db": "Open in DB O11y",
+      "order-id": "order_id",
+      "p95": "p95",
+      "query": "query",
+      "request-duration": "Request duration by route",
+      "slow-queries": "Slowest queries",
+      "slow-request": "Slow request: {{name}}",
+      "sql-not-queried": "A SQL data source is selected, but nothing queries it yet.",
+      "status": "status",
+      "time": "time",
+      "title": "Evidence",
+      "where-title": "Where it breaks",
+      "why-title": "Why"
+    },
+    "hints": {
+      "empty": "All quiet: no regressions in the last 30 minutes.",
+      "empty-partial": "Nothing detected by the data sources that could be measured. Some were not measured, see the notice above.",
+      "investigate": "Investigate",
+      "no-action": "No action needed",
+      "severity-deploy": "Deploy",
+      "severity-errors": "Errors",
+      "severity-slow": "Slow",
+      "sources": "From span metrics and knowledge graph insights",
+      "title": "Detected in the last 30 minutes"
+    },
+    "insights": {
+      "open": "Open",
+      "open-signal": "Open {{app}}: {{label}} {{value}}",
+      "title": "Insights"
+    },
+    "load-error": "Could not query the selected data sources",
+    "loading": {
+      "title": "Grafana Assistant is checking {{service}}"
+    },
+    "notes": {
+      "title": "Not measured"
+    },
+    "overview-error": "Could not query the selected data sources",
+    "overview-loading": "Querying the selected data sources",
+    "scope": {
+      "ask-for-fix": "Ask Assistant for a fix",
+      "attribute-label": "{{attribute}} =",
+      "back": "Back to overview",
+      "change-label": "Change {{attribute}}",
+      "detected": "Scope chosen by Grafana Assistant",
+      "fix-prompt": "Likely cause on {{service}}: {{cause}} How do I fix it?",
+      "likely-cause": "Likely cause:",
+      "manual": "Scope",
+      "namespace": "service.namespace = {{namespace}}",
+      "since": "since {{since}}"
+    },
+    "services": {
+      "browse": "Browse all services",
+      "degraded": "Degraded",
+      "errors": "Errors",
+      "healthy": "Healthy",
+      "insights": "Insights",
+      "last-deploy": "Version {{deploy}}",
+      "p95": "p95",
+      "scope-environment": "Environment",
+      "scope-namespace": "Namespace",
+      "scope-service": "Service",
+      "scope-type-label": "Scope type",
+      "scope-value-label": "Scope value",
+      "scope-value-placeholder": "Pick a value",
+      "title": "Your services"
+    },
+    "signals": {
+      "connect": "Connect a data source",
+      "coverage-databases": "{{covered}} of {{total}} databases",
+      "coverage-services": "{{covered}} of {{total}} services",
+      "no-source": "No data source connected",
+      "not-measured": "Not measured",
+      "setup": "Set up for {{services}}",
+      "title": "Explore by signal"
+    },
+    "subtitle": "Drill down into your data using Grafana's powerful queryless apps",
+    "time-controls": {
+      "about": "About Drilldown"
+    },
+    "title": "Drilldown"
+  },
   "embed": {
     "share": {
       "time-range-description": "Change the current relative time range to an absolute time range",
