@@ -73,6 +73,31 @@ func remoteServiceOptedIn(ctx context.Context, group string) bool {
 	return openfeature.NewDefaultClient().Boolean(ctx, remoteServiceFlag(group), false, openfeature.TransactionContext(ctx))
 }
 
+// RemoteServiceEnabled reports whether group is served by its MT apiserver
+// instead of this Grafana: the remote services file lists it with a host and
+// its aggregation flag is on, the conditions the aggregator and the router use
+// to mount it. It returns false when no remote services file is configured.
+func RemoteServiceEnabled(ctx context.Context, cfg *setting.Cfg, group string) (bool, error) {
+	return remoteServiceEnabled(ctx, cfg, group, remoteServiceOptedIn)
+}
+
+func remoteServiceEnabled(ctx context.Context, cfg *setting.Cfg, group string, optedIn func(context.Context, string) bool) (bool, error) {
+	path := cfg.SectionWithEnvOverrides(remoteServicesSection).Key("remote_services_file").MustString("")
+	if path == "" {
+		return false, nil
+	}
+	svcs, err := readRemoteServicesFile(path)
+	if err != nil {
+		return false, err
+	}
+	for _, s := range svcs {
+		if s.Group == group && s.Host != "" {
+			return optedIn(ctx, group), nil
+		}
+	}
+	return false, nil
+}
+
 // remoteServiceOptions are the settings shared by every remote service target.
 type remoteServiceOptions struct {
 	audience, tokenNamespace, caFile string
