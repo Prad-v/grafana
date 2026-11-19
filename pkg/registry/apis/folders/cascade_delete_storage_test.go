@@ -291,6 +291,7 @@ type fakeFolderStorage struct {
 	existing map[string]*foldersv1.Folder
 	deleted  []string
 	stamped  []string
+	getErr   map[string]error
 }
 
 func (f *fakeFolderStorage) List(context.Context, *metainternalversion.ListOptions) (runtime.Object, error) {
@@ -492,6 +493,9 @@ func TestPendingDeleteOptionalInterfaces(t *testing.T) {
 }
 
 func (f *fakeFolderStorage) Get(_ context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
+	if err := f.getErr[name]; err != nil {
+		return nil, err
+	}
 	fol, ok := f.existing[name]
 	if !ok {
 		return nil, apierrors.NewNotFound(foldersv1.FolderResourceInfo.GroupResource(), name)
@@ -1347,20 +1351,24 @@ func TestCascadeDelete_ForwardsOptionalInterfaces(t *testing.T) {
 }
 
 func TestCascadeDelete_RejectsForcedCollectionDelete(t *testing.T) {
-	setKubernetesFolderCascadeDeleteToggle(t, true)
+	// A forced collection delete skips the contents check, so it is rejected with the flag on or off.
+	for name, enabled := range map[string]bool{"cascade flag on": true, "cascade flag off": false} {
+		t.Run(name, func(t *testing.T) {
+			setKubernetesFolderCascadeDeleteToggle(t, enabled)
 
-	// A forced collection delete can't cascade, so it's rejected rather than orphaning content.
-	inner := &watchableFolderStorage{fakeFolderStorage: &fakeFolderStorage{existing: map[string]*foldersv1.Folder{}}}
-	deleter := newCascadeDeleteStorage(inner, &fakeCascadeSearcher{}, nilDashboardClient, nilVariableClient, nil, nil).(rest.CollectionDeleter)
+			inner := &watchableFolderStorage{fakeFolderStorage: &fakeFolderStorage{existing: map[string]*foldersv1.Folder{}}}
+			deleter := newCascadeDeleteStorage(inner, &fakeCascadeSearcher{}, nilDashboardClient, nilVariableClient, nil, nil).(rest.CollectionDeleter)
 
-	_, err := deleter.DeleteCollection(ctxWithNamespace(), nil, forceDelete(), nil)
-	require.True(t, apierrors.IsBadRequest(err))
-	require.False(t, inner.deletedCollection, "underlying collection delete must not run")
+			_, err := deleter.DeleteCollection(ctxWithNamespace(), nil, forceDelete(), nil)
+			require.True(t, apierrors.IsBadRequest(err))
+			require.False(t, inner.deletedCollection, "underlying collection delete must not run")
 
-	// A non-force collection delete still forwards (the per-folder empty check protects it).
-	_, err = deleter.DeleteCollection(ctxWithNamespace(), nil, &metav1.DeleteOptions{}, nil)
-	require.NoError(t, err)
-	require.True(t, inner.deletedCollection)
+			// A non-force collection delete still forwards (the per-folder empty check protects it).
+			_, err = deleter.DeleteCollection(ctxWithNamespace(), nil, &metav1.DeleteOptions{}, nil)
+			require.NoError(t, err)
+			require.True(t, inner.deletedCollection)
+		})
+	}
 }
 
 func TestCascadeDelete_OptionalInterfacesNotExposedWhenUnsupported(t *testing.T) {
@@ -1434,6 +1442,171 @@ func TestCascadeDelete_FinalizerFolderDelegates(t *testing.T) {
 	gvr := dashv1.DashboardResourceInfo.GroupVersionResource()
 	_, err = dyn.Resource(gvr).Namespace("default").Get(ctxWithNamespace(), "dash-1", metav1.GetOptions{})
 	require.NoError(t, err, "dashboard must be left for the cascade controller")
+}
+
+func TestCascadeDelete_FinalizerFolderChecksContentsAccess(t *testing.T) {
+	newStore := func() *fakeFolderStorage {
+		root := newFolder("root")
+		root.Finalizers = []string{foldersv1.CascadeDeleteFinalizer}
+		return &fakeFolderStorage{existing: map[string]*foldersv1.Folder{"root": root}}
+	}
+
+	t.Run("denied requester cannot mark the folder terminating", func(t *testing.T) {
+		setKubernetesFolderCascadeDeleteToggle(t, true)
+		store := newStore()
+		access := &recordingAccessClient{allow: func(req authlib.CheckRequest, _ string) bool { return req.Resource != cascadeAlertRuleResource }}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(ctxWithNamespace(), "root", nil, forceDelete())
+		require.True(t, apierrors.IsForbidden(err), "got %v", err)
+		require.Empty(t, store.deleted, "the controller must never be handed a folder the requester may not empty")
+	})
+
+	t.Run("allowed requester delegates to the controller", func(t *testing.T) {
+		setKubernetesFolderCascadeDeleteToggle(t, true)
+		store := newStore()
+		access := &recordingAccessClient{}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(ctxWithNamespace(), "root", nil, forceDelete())
+		require.NoError(t, err)
+		require.Equal(t, []string{"root"}, store.deleted)
+		require.NotEmpty(t, access.checks)
+	})
+
+	t.Run("a dry run runs the check and leaves the folder alone", func(t *testing.T) {
+		setKubernetesFolderCascadeDeleteToggle(t, true)
+		opts := forceDelete()
+		opts.DryRun = []string{metav1.DryRunAll}
+
+		denied := newStore()
+		s := &cascadeDeleteStorage{Storage: denied, accessClient: &recordingAccessClient{allow: func(req authlib.CheckRequest, _ string) bool { return req.Resource != cascadeAlertRuleResource }}}
+		_, _, err := s.Delete(ctxWithNamespace(), "root", nil, opts)
+		require.True(t, apierrors.IsForbidden(err), "got %v", err)
+
+		allowed := newStore()
+		s = &cascadeDeleteStorage{Storage: allowed, accessClient: &recordingAccessClient{}}
+		_, _, err = s.Delete(ctxWithNamespace(), "root", nil, opts)
+		require.NoError(t, err)
+		require.Empty(t, allowed.deleted)
+		require.Contains(t, allowed.existing, "root")
+	})
+
+	t.Run("without an access client the check is skipped, as in the synchronous path", func(t *testing.T) {
+		setKubernetesFolderCascadeDeleteToggle(t, true)
+		store := newStore()
+		s := &cascadeDeleteStorage{Storage: store}
+
+		_, _, err := s.Delete(ctxWithNamespace(), "root", nil, forceDelete())
+		require.NoError(t, err)
+		require.Equal(t, []string{"root"}, store.deleted)
+	})
+
+	t.Run("checks the requester even with the cascade flag off", func(t *testing.T) {
+		// validateOnDelete allows a forced delete of a finalizer folder whatever the flag says.
+		setKubernetesFolderCascadeDeleteToggle(t, false)
+		store := newStore()
+		access := &recordingAccessClient{allow: func(req authlib.CheckRequest, _ string) bool { return req.Resource != cascadeAlertRuleResource }}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(ctxWithNamespace(), "root", nil, forceDelete())
+		require.True(t, apierrors.IsForbidden(err), "got %v", err)
+		require.Empty(t, store.deleted)
+	})
+
+	// serviceCtx is the cascade controller's caller: an access policy with no folder permissions.
+	serviceCtx := func() context.Context {
+		return identity.WithRequester(apirequest.WithNamespace(context.Background(), "default"),
+			&identity.StaticRequester{Type: authlib.TypeAccessPolicy, UserUID: "access-policy:grafana", Namespace: "default"})
+	}
+	// subfolderOf builds a store holding a finalizer subfolder under a parent, terminating or not.
+	subfolderOf := func(terminatingParent bool) *fakeFolderStorage {
+		parent := newFolder("parent")
+		parent.Finalizers = []string{foldersv1.CascadeDeleteFinalizer}
+		if terminatingParent {
+			now := metav1.Now()
+			parent.DeletionTimestamp = &now
+		}
+		child := newFolder("child")
+		child.Finalizers = []string{foldersv1.CascadeDeleteFinalizer}
+		child.Annotations = map[string]string{utils.AnnoKeyFolder: "parent"}
+		return &fakeFolderStorage{existing: map[string]*foldersv1.Folder{"parent": parent, "child": child}}
+	}
+
+	t.Run("a service deleting a subfolder of a terminating folder is not checked", func(t *testing.T) {
+		// The controller carries out a delete authorized at the root; a service has no permissions to check.
+		setKubernetesFolderCascadeDeleteToggle(t, false)
+		store := subfolderOf(true)
+		access := &recordingAccessClient{allow: func(authlib.CheckRequest, string) bool { return false }}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(serviceCtx(), "child", nil, forceDelete())
+		require.NoError(t, err)
+		require.Equal(t, []string{"child"}, store.deleted)
+		require.Empty(t, access.checks)
+	})
+
+	t.Run("a user deleting a subfolder of a terminating folder is still checked", func(t *testing.T) {
+		// Only a service is exempt: the subfolder of a cascade in progress is no shortcut for a user.
+		setKubernetesFolderCascadeDeleteToggle(t, false)
+		store := subfolderOf(true)
+		access := &recordingAccessClient{allow: func(authlib.CheckRequest, string) bool { return false }}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(ctxWithNamespace(), "child", nil, forceDelete())
+		require.True(t, apierrors.IsForbidden(err), "got %v", err)
+		require.Empty(t, store.deleted)
+		require.NotEmpty(t, access.checks)
+	})
+
+	t.Run("a failure reading the parent is returned, not reported as a permission failure", func(t *testing.T) {
+		setKubernetesFolderCascadeDeleteToggle(t, false)
+		store := subfolderOf(true)
+		boom := errors.New("storage unavailable")
+		store.getErr = map[string]error{"parent": boom}
+		access := &recordingAccessClient{allow: func(authlib.CheckRequest, string) bool { return false }}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(serviceCtx(), "child", nil, forceDelete())
+		require.ErrorIs(t, err, boom)
+		require.False(t, apierrors.IsForbidden(err))
+		require.Empty(t, store.deleted)
+		require.Empty(t, access.checks)
+	})
+
+	t.Run("a service deleting a subfolder whose parent is gone is checked", func(t *testing.T) {
+		setKubernetesFolderCascadeDeleteToggle(t, false)
+		store := subfolderOf(true)
+		delete(store.existing, "parent")
+		access := &recordingAccessClient{allow: func(authlib.CheckRequest, string) bool { return false }}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(serviceCtx(), "child", nil, forceDelete())
+		require.True(t, apierrors.IsForbidden(err), "got %v", err)
+		require.Empty(t, store.deleted)
+	})
+
+	t.Run("a service deleting a root folder is checked like a user", func(t *testing.T) {
+		setKubernetesFolderCascadeDeleteToggle(t, false)
+		store := newStore()
+		access := &recordingAccessClient{allow: func(authlib.CheckRequest, string) bool { return false }}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(serviceCtx(), "root", nil, forceDelete())
+		require.True(t, apierrors.IsForbidden(err), "got %v", err)
+		require.Empty(t, store.deleted)
+	})
+
+	t.Run("a service deleting a subfolder of a folder that is not terminating is checked", func(t *testing.T) {
+		setKubernetesFolderCascadeDeleteToggle(t, false)
+		store := subfolderOf(false)
+		access := &recordingAccessClient{allow: func(authlib.CheckRequest, string) bool { return false }}
+		s := &cascadeDeleteStorage{Storage: store, accessClient: access}
+
+		_, _, err := s.Delete(serviceCtx(), "child", nil, forceDelete())
+		require.True(t, apierrors.IsForbidden(err), "got %v", err)
+		require.Empty(t, store.deleted)
+	})
 }
 
 // recordingAccessClient records Check calls and optionally filters by allow.
