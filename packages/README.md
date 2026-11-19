@@ -65,7 +65,18 @@ Below 1.0 Nx shifts the bump down one level (its [`adjustSemverBumpsForZeroMajor
 
 `perf`, `refactor`, `docs`, `build`, `types`, `examples`, `test`, `style`, `ci` and `revert` do not release either. Use `fix` for an internal improvement that consumers should get. Several pull requests in one release combine into the highest bump, and every releasing title becomes a changelog entry.
 
-Nx finds the changes since the last release from the `<name>@<version>` git tag of the package, for example `@grafana/plugin-compat@0.10.0`, which the publish workflow creates. Do not delete these tags.
+The `Release NPM independent packages` workflow runs when a change to an independent package lands on `main`. A package is independent when its project has the `release:independent` tag. The workflow has four jobs:
+
+1. `plan` finds the merged version pull request that is still labelled `nx-release:pending` and works out which packages it released, and so which `<name>@<version>` tags are missing.
+2. `tag` creates those tags with the shared `create-release-tag.yml` workflow, one tag at a time. Tags that already exist are skipped.
+3. `release` starts after the tags exist, relabels the version pull request `nx-release:tagged`, and then opens or updates one pull request titled `Release: Frontend packages`, from the `nx-release-branch--main` branch and labelled `nx-release:pending`, with the new versions and changelog entries. Nx counts the commits since the last tag, which is why the tags come first.
+4. `publish` also starts after the tags exist, and builds, validates and publishes just the tagged packages to npm. It does not wait for the `release` job.
+
+Merging the version pull request releases the packages.
+
+To preview a release, run the workflow from the Actions tab with `dry_run` enabled. To publish again after a failed run, re-run the failed jobs: jobs that succeeded keep their results, and tags that already exist are skipped. Or run the workflow with `tags` set to a comma-separated list of existing tags, which publishes them and does not prepare a version pull request.
+
+Nx finds the changes since the last release from the `<name>@<version>` git tag of the package, for example `@grafana/plugin-compat@0.10.0`, which the `tag` job creates. Do not delete these tags. If the tag for the version on `main` is missing, the workflow warns and does not open a version pull request.
 
 ### Stable releases
 
