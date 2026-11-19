@@ -439,6 +439,19 @@ export interface FieldOverrideEnv extends FieldOverrideContext {
   varMappings?: Record<string, string>;
 }
 
+let isVarMappingsEnabled = () => false;
+
+/**
+ * Used by Grafana internals to decide whether `varMappings` are resolved. Grafana backs it with the
+ * grafana.panelOptionInterpolation flag. While it returns false every panel uses its stored values
+ * and the expressions stay in the saved JSON.
+ *
+ * @internal
+ */
+export function setVarMappingsEnabledResolver(resolver: () => boolean) {
+  isVarMappingsEnabled = resolver;
+}
+
 /**
  * Returns the resolved expression for an eligible property when it resolves to a usable value of
  * the property's kind, otherwise the stored value, so an unresolvable expression falls back
@@ -450,6 +463,10 @@ function resolveVarMappingInput(
   rawValue: unknown,
   context: FieldOverrideEnv
 ): unknown {
+  if (!isVarMappingsEnabled()) {
+    return rawValue;
+  }
+
   const kind = getVarMappingKind(item);
   const expr = context.varMappings?.[varMappingId];
   if (!kind || typeof expr !== 'string') {
