@@ -4,7 +4,7 @@ import { css } from '@emotion/css';
 
 import { type GrafanaTheme2 } from '@grafana/data';
 import { config, PluginPage } from '@grafana/runtime';
-import { Alert, Badge, Button, Icon, useStyles2 } from '@grafana/ui';
+import { Alert, Badge, Button, Icon, LinkButton, useStyles2 } from '@grafana/ui';
 
 import { fetchConfig, type AgentConfig } from '../api';
 import { PLUGIN_ID, SUGGESTIONS } from '../constants';
@@ -72,9 +72,16 @@ export function ChatPage() {
               </>
             )}
           </div>
-          <Button variant="secondary" size="sm" icon="plus" onClick={reset} disabled={messages.length === 0}>
-            New chat
-          </Button>
+          <div className={styles.actions}>
+            {config.bootData.user.orgRole === 'Admin' && (
+              <LinkButton variant="secondary" size="sm" icon="cog" href={`${config.appSubUrl}/plugins/${PLUGIN_ID}?page=settings`}>
+                Settings
+              </LinkButton>
+            )}
+            <Button variant="secondary" size="sm" icon="plus" onClick={reset} disabled={messages.length === 0}>
+              New chat
+            </Button>
+          </div>
         </div>
 
         {agent.status === 'ready' && agent.config.llm?.error && (
@@ -143,6 +150,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   page: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1.5), height: 'calc(100vh - 230px)', minHeight: 420 }),
   bar: css({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: theme.spacing(1), flexWrap: 'wrap' }),
   status: css({ display: 'flex', gap: theme.spacing(1), flexWrap: 'wrap' }),
+  actions: css({ display: 'flex', gap: theme.spacing(1) }),
   list: css({
     flex: 1,
     overflowY: 'auto',
