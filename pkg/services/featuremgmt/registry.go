@@ -2913,7 +2913,7 @@ var (
 			Stage:        FeatureStagePublicPreview,
 			Owner:        grafanaFrontendPlatformSquad,
 			HideFromDocs: true,
-			Expression:   "true",
+			Expression:   "false",
 			Generate:     Generate{React: true},
 		},
 		{
