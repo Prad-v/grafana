@@ -76,6 +76,8 @@ Merging the version pull request releases the packages.
 
 To preview a release, run the workflow from the Actions tab with `dry_run` enabled. To publish again after a failed run, re-run the failed jobs: jobs that succeeded keep their results, and tags that already exist are skipped. Or run the workflow with `tags` set to a comma-separated list of existing tags, which publishes them and does not prepare a version pull request.
 
+Publishing uses npm trusted publishing, so there is no npm token. Each independent package needs a one-time trusted publisher entry on npmjs.com (package settings, "Trusted Publisher", GitHub Actions) with the organization `grafana`, the repository `grafana`, the workflow filename `release-npm-independent-packages.yml` and the environment `npm-publish`. To make another package independent, add the `release:independent` tag to its `project.json` (the `plugin-compat` release group selects every project with that tag), add its path to the `paths` of the `Check plugin-compat pull request title` workflow and of the `Release NPM independent packages` workflow, create its first release tag, and register its trusted publisher.
+
 Nx finds the changes since the last release from the `<name>@<version>` git tag of the package, for example `@grafana/plugin-compat@0.10.0`, which the `tag` job creates. Do not delete these tags. If the tag for the version on `main` is missing, the workflow warns and does not open a version pull request.
 
 ### Stable releases
