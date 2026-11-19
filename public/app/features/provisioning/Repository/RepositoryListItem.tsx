@@ -7,11 +7,11 @@ import { t, Trans } from '@grafana/i18n';
 import { reportInteraction } from '@grafana/runtime';
 import { Button, Card, LinkButton, Stack, Text, TextLink, useStyles2 } from '@grafana/ui';
 import { type Repository } from 'app/api/clients/provisioning/v0alpha1';
+import { ReadOnlyBadge } from 'app/core/components/ReadOnlyBadge/ReadOnlyBadge';
 
 import { RepoIcon } from '../Shared/RepoIcon';
 import { StatusBadge } from '../Shared/StatusBadge';
 import { ManagedBadge } from '../components/ManagedBadge';
-import { ReadOnlyBadge } from '../components/ReadOnlyBadge';
 import { PROVISIONING_URL } from '../constants';
 import { exportResourceAsJson } from '../utils/export';
 import { formatRepoUrl, getRepoHrefForProvider } from '../utils/git';
@@ -85,10 +85,17 @@ export function RepositoryListItem({ repository }: Props) {
         <Stack gap={2} direction="row" alignItems="center" wrap>
           {spec?.title && <Text variant="h3">{spec.title}</Text>}
           <StatusBadge repo={repository} />
-          {isReadOnlyRepo && <ReadOnlyBadge repoType={spec?.type} subject="repository" />}
-          {isReadOnly && <ReadOnlyBadge subject="configuration" />}
+          {isReadOnlyRepo && (
+            <ReadOnlyBadge
+              tooltip={t(
+                'provisioning.config-form.description-read-only',
+                "Resources can't be modified through Grafana."
+              )}
+            />
+          )}
           {isManagedRepo && (
             <ManagedBadge
+              isReadOnly={isReadOnly}
               managerKind={getManagerKind(repository)}
               name={getManagerIdentity(repository)}
               repositoryName={getManagerIdentity(repository)}
