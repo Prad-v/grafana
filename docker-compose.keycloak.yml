@@ -1,0 +1,48 @@
+# Keycloak identity provider with two demo tenants (tenant-a, tenant-b).
+#
+#   make sso-deploy      # Keycloak + Grafana wired together (see docker-compose.sso.yml)
+#
+# This file owns the shared `kekaflow-sso` network, so start it before the
+# Grafana override. Configuration comes from .env (see .env.sso.example).
+name: kekaflow-keycloak
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_TAG:-26.4.0}
+    command: ["start-dev", "--import-realm"]
+    restart: unless-stopped
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+      # Browsers use localhost:<port>. Other containers reach Keycloak as
+      # keycloak:8080 and get back-channel URLs (token, userinfo) for that host.
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8080}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      # Substituted into keycloak/realm-kekaflow.json at import time.
+      GRAFANA_CLIENT_SECRET: ${GRAFANA_CLIENT_SECRET:?set GRAFANA_CLIENT_SECRET in .env}
+      SSO_TEST_PASSWORD: ${SSO_TEST_PASSWORD:?set SSO_TEST_PASSWORD in .env}
+      GRAFANA_PORT: ${GRAFANA_PORT:-3000}
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./keycloak/realm-kekaflow.json:/opt/keycloak/data/import/realm-kekaflow.json:ro
+    networks:
+      - sso
+    healthcheck:
+      # The image has no curl, so probe the management port with bash.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/localhost/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"status": "UP"' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+networks:
+  sso:
+    name: kekaflow-sso

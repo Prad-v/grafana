@@ -1,0 +1,16 @@
+# Development cluster. Use with: helm install ... -f values.yaml -f values-dev.yaml
+image:
+  pullPolicy: Always
+
+agent:
+  logLevel: DEBUG
+
+networkPolicy:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 192Mi
+  limits:
+    memory: 512Mi

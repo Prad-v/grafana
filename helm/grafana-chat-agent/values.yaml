@@ -1,0 +1,97 @@
+# Safe defaults: no credentials live here. Supply the secrets with `auth.existingSecret`
+# and `anthropic.existingSecret`, or let the chart create them from `auth.token` and
+# `anthropic.apiKey` (pass those with --set or a values file kept out of git).
+
+replicaCount: 1
+
+image:
+  repository: kekaflow/grafana-chat-agent
+  # CI updates this to the tag it just built.
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Shared secret between Grafana's plugin proxy and the agent. Required.
+auth:
+  # Name of an existing Secret that holds the token. Preferred.
+  existingSecret: ""
+  existingSecretKey: token
+  # Used to create a Secret when existingSecret is empty.
+  token: ""
+
+# Claude API key. Required for the assistant to answer.
+anthropic:
+  existingSecret: ""
+  existingSecretKey: anthropic-api-key
+  apiKey: ""
+
+agent:
+  model: anthropic/claude-sonnet-5-5
+  logLevel: INFO
+  # Hosts that the plugin's Settings page may point the agent at (the LiteLLM proxy
+  # address). A host name matches any port; "host:port" matches that port only. The
+  # organization admin chooses the address, so list only hosts the agent may call.
+  allowedLlmHosts:
+    - api.anthropic.com
+  # Allow tools that change Grafana. Keep off unless you need it.
+  allowWrites: false
+  extraInstruction: ""
+  maxMessageChars: 4000
+  maxLlmCalls: 25
+  sessionTtlSeconds: 3600
+  maxSessions: 500
+  backendTimeoutSeconds: 30
+
+mcp:
+  enabled: true
+  url: http://mcp-grafana:8000/mcp
+  # Name of an existing Secret with a bearer token, if mcp-grafana is protected. Optional.
+  tokenSecret: ""
+  tokenSecretKey: token
+
+backends:
+  metricsUrl: http://victoriametrics:8428
+  logsUrl: http://victorialogs:9428
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Conversations live in memory, so more than one replica needs session affinity at the
+# Service or ingress. Leave at one replica unless you have set that up.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+serviceAccount:
+  create: true
+  annotations: {}
+
+# Only the listed pods can reach the agent. Grafana's plugin proxy is the only client.
+networkPolicy:
+  enabled: true
+  # Labels of the Grafana pods allowed to call the agent.
+  grafanaPodLabels:
+    app.kubernetes.io/name: grafana
+  # Namespace of those pods. Empty means the release namespace.
+  grafanaNamespace: ""
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

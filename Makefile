@@ -860,3 +860,6 @@ GENERATE_POLICY_BOT_CONFIG_SHA := sha256:ebd798a15f5d05af418da11366eb7cc01d1c474
 	sed -i.bak '/name: Workflow \.github\/workflows\/govulncheck\.yml/,/workflows:/{s/- success/- success\n            - failure/;}' .policy.yml; rm -f .policy.yml.bak
 # Make detect-breaking-changes-levitate non-blocking - accept failure so it doesn't prevent merge
 	sed -i.bak '/name: Workflow \.github\/workflows\/detect-breaking-changes-levitate\.yml/,/workflows:/{s/- success/- success\n            - failure/;}' .policy.yml; rm -f .policy.yml.bak
+
+# Docker Compose build/deploy targets (compose-*)
+-include docker.mk

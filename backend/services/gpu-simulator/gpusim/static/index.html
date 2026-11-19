@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU Fleet Simulator</title>
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --border:#2a2f3a; --text:#e6e8ee;
+          --muted:#8b93a7; --accent:#4c9aff; --ok:#3fb950; --warn:#d29922; --err:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:.75rem 1.5rem; align-items:center; padding:.9rem 1.25rem; border-bottom:1px solid var(--border); background:var(--panel); position:sticky; top:0; z-index:5; }
+  h1 { font-size:1.1rem; margin:0; }
+  h2 { font-size:.95rem; margin:0 0 .75rem; }
+  .chips { display:flex; flex-wrap:wrap; gap:.5rem; }
+  .chip { background:var(--panel2); border:1px solid var(--border); border-radius:999px; padding:.15rem .7rem; font-size:.8rem; color:var(--muted); }
+  .chip b { color:var(--text); font-weight:600; }
+  .chip.bad b { color:var(--err); } .chip.good b { color:var(--ok); } .chip.warn b { color:var(--warn); }
+  nav { margin-left:auto; display:flex; gap:1rem; font-size:.85rem; }
+  a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+  main { display:grid; grid-template-columns:repeat(12,1fr); gap:1rem; padding:1rem 1.25rem 3rem; }
+  section { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:1rem; min-width:0; }
+  .c12 { grid-column:span 12; } .c6 { grid-column:span 6; } .c4 { grid-column:span 4; } .c8 { grid-column:span 8; }
+  @media (max-width:1100px) { .c6,.c4,.c8 { grid-column:span 12; } }
+  label { display:block; color:var(--muted); font-size:.78rem; margin:.5rem 0 .15rem; }
+  .row { display:flex; flex-wrap:wrap; gap:.75rem; align-items:flex-end; }
+  .row > div { flex:1 1 9rem; min-width:7rem; }
+  input, select, button, textarea { font:inherit; color:var(--text); background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:.35rem .55rem; }
+  input[type=range] { width:100%; padding:0; accent-color:var(--accent); }
+  input[type=number], input[type=text], select { width:100%; }
+  button { cursor:pointer; } button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#06101f; font-weight:600; }
+  button.danger:hover { border-color:var(--err); color:var(--err); }
+  table { width:100%; border-collapse:collapse; font-size:.82rem; }
+  th, td { text-align:left; padding:.3rem .5rem; border-bottom:1px solid var(--border); vertical-align:middle; white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; }
+  td.wrap { white-space:normal; word-break:break-word; }
+  td input[type=range] { width:7rem; vertical-align:middle; }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .presets { display:flex; flex-wrap:wrap; gap:.5rem; }
+  .muted { color:var(--muted); font-size:.8rem; }
+  .lvl-info { color:var(--muted); } .lvl-warn { color:var(--warn); } .lvl-error { color:var(--err); }
+  .logbox { max-height:22rem; overflow:auto; font:12px/1.4 ui-monospace,Menlo,Consolas,monospace; }
+  .logbox td { padding:.15rem .4rem; }
+  .off { opacity:.45; }
+  .checks { display:flex; flex-wrap:wrap; gap:.4rem 1rem; margin-top:.4rem; }
+  .checks label { display:flex; gap:.35rem; align-items:center; margin:0; color:var(--text); font-size:.82rem; }
+  #toast { position:fixed; right:1rem; bottom:1rem; background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:.6rem .9rem; display:none; max-width:26rem; z-index:10; }
+  #toast.err { border-color:var(--err); color:var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <h1>GPU Fleet Simulator</h1>
+  <div class="chips" id="chips"></div>
+  <nav id="links"></nav>
+</header>
+
+<main>
+  <section class="c12">
+    <h2>Scenarios</h2>
+    <div class="presets" id="presets"></div>
+    <p class="muted" id="preset-help" style="margin:.6rem 0 0"></p>
+  </section>
+
+  <section class="c4">
+    <h2>Fleet</h2>
+    <div class="row">
+      <button id="pause" class="primary"></button>
+      <button id="reset" class="danger" title="Reboot every GPU, clear faults and restore defaults">Reset fleet</button>
+    </div>
+    <label>Global load <span id="intensity-val" class="muted"></span></label>
+    <input type="range" id="intensity" min="0" max="150" step="1">
+    <label>Sensor noise <span id="noise-val" class="muted"></span></label>
+    <input type="range" id="noise" min="0" max="100" step="1">
+    <div class="row">
+      <div><label>Nodes per datacenter</label><input type="number" id="nodes" min="1" max="64"></div>
+      <div><label>GPUs per node</label><input type="number" id="gpn" min="1" max="16"></div>
+      <div style="flex:0 0 auto"><button id="resize">Apply</button></div>
+    </div>
+    <p class="muted" id="fleet-total"></p>
+  </section>
+
+  <section class="c8">
+    <h2>Regions</h2>
+    <table>
+      <thead><tr><th>On</th><th>Region</th><th>Load</th><th>Ambient +&deg;C</th>
+        <th class="num">GPUs up</th><th class="num">Util %</th><th class="num">Temp avg/max</th><th class="num">kW</th><th class="num">Faulted</th></tr></thead>
+      <tbody id="regions"></tbody>
+    </table>
+    <p class="muted">Switching a region off stops all of its metrics and logs, like a network partition.</p>
+  </section>
+
+  <section class="c6">
+    <h2>Inject a fault</h2>
+    <label>Fault</label>
+    <select id="f-kind"></select>
+    <p class="muted" id="f-desc" style="margin:.3rem 0 0"></p>
+    <div id="f-scope"></div>
+    <div id="f-params" class="row"></div>
+    <div class="row">
+      <div><label>Intensity <span id="f-int-val" class="muted"></span></label><input type="range" id="f-int" min="0" max="100" value="70"></div>
+      <div><label>Duration</label>
+        <select id="f-dur">
+          <option value="0">Until cleared</option><option value="60">1 minute</option><option value="300">5 minutes</option>
+          <option value="900" selected>15 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option>
+        </select></div>
+      <div style="flex:0 0 auto"><button id="f-go" class="primary">Inject</button></div>
+    </div>
+    <h2 style="margin-top:1.1rem">Active faults <button id="f-clear" class="danger" style="float:right">Clear all</button></h2>
+    <table><thead><tr><th>Fault</th><th>Scope</th><th class="num">Intensity</th><th class="num">Remaining</th><th></th></tr></thead>
+      <tbody id="faults"></tbody></table>
+  </section>
+
+  <section class="c6">
+    <h2>Logs</h2>
+    <div class="row">
+      <div><label><input type="checkbox" id="logs-on"> Generate logs</label></div>
+    </div>
+    <label>Background rate <span id="rate-val" class="muted"></span></label>
+    <input type="range" id="rate" min="0" max="200" step="1">
+    <div class="row">
+      <div><label>Warnings <span id="warn-val" class="muted"></span></label><input type="range" id="warn" min="0" max="100" step="1"></div>
+      <div><label>Errors <span id="err-val" class="muted"></span></label><input type="range" id="errr" min="0" max="100" step="1"></div>
+    </div>
+    <label>Sources</label>
+    <div class="checks" id="sources"></div>
+    <h2 style="margin-top:1.1rem">Emit a burst</h2>
+    <div id="b-scope"></div>
+    <div class="row">
+      <div><label>Lines</label><input type="number" id="b-count" min="1" max="5000" value="100"></div>
+      <div><label>Level</label><select id="b-level"></select></div>
+      <div><label>App</label><select id="b-app"></select></div>
+    </div>
+    <label>Message (blank = generated)</label>
+    <input type="text" id="b-msg" maxlength="500">
+    <div class="row" style="margin-top:.6rem"><button id="b-go" class="primary">Emit</button></div>
+  </section>
+
+  <section class="c12">
+    <h2>Live log tail</h2>
+    <div class="row">
+      <div><label>Level</label><select id="t-level"><option value="">All</option></select></div>
+      <div><label>Region</label><select id="t-region"><option value="">All</option></select></div>
+    </div>
+    <div class="logbox" style="margin-top:.6rem">
+      <table><thead><tr><th>Time</th><th>Level</th><th>Region</th><th>Node</th><th>GPU</th><th>App</th><th>Message</th></tr></thead>
+      <tbody id="tail"></tbody></table>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const h = (tag, props = {}, ...kids) => {
+  const n = Object.assign(document.createElement(tag), props);
+  for (const k of kids) n.append(k);
+  return n;
+};
+const fmt = (v, d = 0) => Number(v).toFixed(d);
+let meta, topo, state;
+
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+let toastTimer;
+function toast(msg, err) {
+  const t = $("#toast");
+  t.textContent = msg; t.className = err ? "err" : ""; t.style.display = "block";
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.style.display = "none"), err ? 6000 : 2500);
+}
+async function act(fn, ok) {
+  try { const r = await fn(); if (ok) toast(typeof ok === "function" ? ok(r) : ok); await refresh(); }
+  catch (e) { toast(e.message, true); }
+}
+// Do not overwrite a control the user is touching.
+const setVal = (el, v) => { if (document.activeElement !== el) el.value = v; };
+const setChk = (el, v) => { if (document.activeElement !== el) el.checked = v; };
+const scopeText = (s) => Object.keys(s).length ? ["region", "datacenter", "node", "gpu"].filter((k) => k in s).map((k) => (k === "gpu" ? "gpu " : "") + s[k]).join(" / ") : "entire fleet";
+
+// ---- scope picker: region > datacenter > node > gpu -------------------------------------------
+function scopePicker(root) {
+  const mk = (label) => { const s = h("select"); root.append(h("div", {}, h("label", { textContent: label }), s)); return s; };
+  root.className = "row";
+  const region = mk("Region"), dc = mk("Datacenter"), node = mk("Node"), gpu = mk("GPU");
+  const opt = (sel, items, all) => { sel.replaceChildren(h("option", { value: "", textContent: all }), ...items.map((i) => h("option", { value: i, textContent: i }))); };
+  const find = () => topo.find((r) => r.name === region.value);
+  function onRegion() {
+    const r = find();
+    opt(dc, r ? r.datacenters.map((d) => d.name) : [], "All datacenters"); dc.disabled = !r; onDc();
+  }
+  function onDc() {
+    const r = find(), d = r && r.datacenters.find((x) => x.name === dc.value);
+    opt(node, d ? d.nodes : [], "All nodes"); node.disabled = !d; onNode();
+  }
+  function onNode() {
+    opt(gpu, node.value ? [...Array(state.topology.gpus_per_node).keys()].map(String) : [], "All GPUs"); gpu.disabled = !node.value;
+  }
+  region.onchange = onRegion; dc.onchange = onDc; node.onchange = onNode;
+  return {
+    init() { opt(region, topo.map((r) => r.name), "All regions"); onRegion(); },
+    get() { const s = { region: region.value, datacenter: dc.value, node: node.value, gpu: gpu.value }; for (const k in s) if (s[k] === "") delete s[k]; return s; },
+  };
+}
+const faultScope = scopePicker($("#f-scope")), burstScope = scopePicker($("#b-scope"));
+
+// ---- one-time construction ---------------------------------------------------------------------
+function build() {
+  for (const [name, desc] of Object.entries(meta.presets)) {
+    const b = h("button", { textContent: name.replace(/-/g, " "), title: desc });
+    b.onclick = () => act(() => api("POST", `/api/presets/${name}`), desc);
+    b.onmouseenter = () => ($("#preset-help").textContent = desc);
+    $("#presets").append(b);
+  }
+  $("#links").append(...Object.entries(meta.links).map(([k, v]) => h("a", { href: v, target: "_blank", rel: "noopener", textContent: k })));
+
+  for (const [k, v] of Object.entries(meta.fault_kinds)) $("#f-kind").append(h("option", { value: k, textContent: v.label }));
+  $("#f-kind").onchange = renderParams; renderParams();
+  $("#f-int").oninput = () => ($("#f-int-val").textContent = $("#f-int").value + "%"); $("#f-int").oninput();
+  $("#f-go").onclick = () => act(() => {
+    const params = {};
+    for (const i of document.querySelectorAll("#f-params [data-param]")) if (i.value !== "") params[i.dataset.param] = i.type === "number" ? +i.value : i.value;
+    return api("POST", "/api/faults", { kind: $("#f-kind").value, scope: faultScope.get(), duration_s: +$("#f-dur").value, intensity: $("#f-int").value / 100, params });
+  }, "Fault injected");
+  $("#f-clear").onclick = () => act(() => api("DELETE", "/api/faults"), "Faults cleared");
+
+  for (const k of meta.log_sources) {
+    const c = h("input", { type: "checkbox", id: "src-" + k });
+    c.onchange = () => act(() => api("PUT", "/api/settings", { sources: { [k]: c.checked } }));
+    $("#sources").append(h("label", {}, c, k));
+  }
+  for (const l of meta.log_levels) for (const s of ["#b-level", "#t-level"]) $(s).append(h("option", { value: l, textContent: l }));
+  $("#b-app").append(h("option", { value: "", textContent: "Any" }), ...meta.log_apps.map((a) => h("option", { value: a, textContent: a })));
+  $("#b-level").value = "error";
+  $("#b-go").onclick = () => act(() => api("POST", "/api/logs/burst", {
+    count: +$("#b-count").value, level: $("#b-level").value, app: $("#b-app").value, scope: burstScope.get(), message: $("#b-msg").value,
+  }), (r) => `${r.emitted} lines emitted`);
+
+  const bind = (id, valId, toLabel, toBody) => {
+    const el = $(id);
+    el.oninput = () => ($(valId).textContent = toLabel(el.value));
+    el.onchange = () => act(() => api("PUT", "/api/settings", toBody(el.value)));
+  };
+  bind("#intensity", "#intensity-val", (v) => v + "%", (v) => ({ intensity: v / 100 }));
+  bind("#noise", "#noise-val", (v) => v + "%", (v) => ({ noise: v / 100 }));
+  bind("#rate", "#rate-val", (v) => (v / 10).toFixed(1) + " lines / node / s", (v) => ({ log_rate: v / 10 }));
+  bind("#warn", "#warn-val", (v) => v + "%", (v) => ({ warn_ratio: v / 100 }));
+  bind("#errr", "#err-val", (v) => v + "%", (v) => ({ error_ratio: v / 100 }));
+  $("#logs-on").onchange = () => act(() => api("PUT", "/api/settings", { logs_enabled: $("#logs-on").checked }));
+  $("#pause").onclick = () => act(() => api("PUT", "/api/settings", { paused: !state.settings.paused }));
+  $("#reset").onclick = () => { if (confirm("Reboot every GPU, clear all faults and restore defaults?")) act(() => api("POST", "/api/reset"), "Fleet reset"); };
+  $("#resize").onclick = () => act(async () => {
+    await api("PUT", "/api/topology", { nodes_per_dc: +$("#nodes").value, gpus_per_node: +$("#gpn").value });
+    topo = await api("GET", "/api/topology");
+    state = await api("GET", "/api/state");
+    faultScope.init(); burstScope.init();
+  }, "Fleet resized");
+
+  for (const r of topo) {
+    const on = h("input", { type: "checkbox" }), load = h("input", { type: "range", min: 0, max: 200 }), amb = h("input", { type: "range", min: -10, max: 40 });
+    const lv = h("span", { className: "muted" }), av = h("span", { className: "muted" });
+    on.onchange = () => act(() => api("PUT", `/api/regions/${r.name}`, { enabled: on.checked }));
+    load.oninput = () => (lv.textContent = " " + load.value + "%");
+    load.onchange = () => act(() => api("PUT", `/api/regions/${r.name}`, { load: load.value / 100 }));
+    amb.oninput = () => (av.textContent = " +" + amb.value);
+    amb.onchange = () => act(() => api("PUT", `/api/regions/${r.name}`, { ambient_offset: +amb.value }));
+    const cells = ["up", "util", "temp", "kw", "fault"].map(() => h("td", { className: "num" }));
+    const tr = h("tr", {}, h("td", {}, on), h("td", {}, h("b", { textContent: r.name }), h("div", { className: "muted", textContent: `${r.city} / ${r.gpu_model}` })),
+      h("td", {}, load, lv), h("td", {}, amb, av), ...cells);
+    tr._r = { on, load, amb, lv, av, cells };
+    tr._name = r.name;
+    $("#regions").append(tr);
+  }
+  const tr = $("#t-region");
+  for (const r of topo) tr.append(h("option", { value: r.name, textContent: r.name }));
+  faultScope.init(); burstScope.init();
+}
+
+function renderParams() {
+  const kind = meta.fault_kinds[$("#f-kind").value];
+  $("#f-desc").textContent = kind.description;
+  $("#f-params").replaceChildren(...kind.params.map((p) => {
+    const input = p.type === "select"
+      ? h("select", {}, h("option", { value: "", textContent: "Random" }), ...p.options.map((o) => h("option", { value: o, textContent: o })))
+      : h("input", { type: "number", min: p.min, max: p.max, value: p.default ?? "" });
+    input.dataset.param = p.name;
+    return h("div", {}, h("label", { textContent: p.label }), input);
+  }));
+}
+
+// ---- polling -----------------------------------------------------------------------------------
+function chip(label, value, cls = "") { return h("span", { className: "chip " + cls }, label + " ", h("b", { textContent: value })); }
+
+function render() {
+  const s = state, st = s.settings, up = s.regions.reduce((a, r) => a + r.gpus_up, 0), total = s.topology.total_gpus;
+  $("#chips").replaceChildren(
+    chip("simulation", st.paused ? "paused" : "running", st.paused ? "warn" : "good"),
+    chip("GPUs up", `${up}/${total}`, up < total ? "warn" : "good"),
+    chip("faults", s.faults.length, s.faults.length ? "warn" : ""),
+    chip("logs shipped", s.shipper.shipped.toLocaleString(), s.shipper.enabled ? "" : "warn"),
+    chip("ship errors", s.shipper.errors, s.shipper.errors ? "bad" : ""),
+    chip("queue", s.shipper.queue),
+  );
+  $("#pause").textContent = st.paused ? "Resume" : "Pause";
+  setVal($("#intensity"), Math.round(st.intensity * 100)); $("#intensity-val").textContent = Math.round(st.intensity * 100) + "%";
+  setVal($("#noise"), Math.round(st.noise * 100)); $("#noise-val").textContent = Math.round(st.noise * 100) + "%";
+  setVal($("#rate"), Math.round(st.log_rate * 10)); $("#rate-val").textContent = st.log_rate.toFixed(1) + " lines / node / s";
+  setVal($("#warn"), Math.round(st.warn_ratio * 100)); $("#warn-val").textContent = Math.round(st.warn_ratio * 100) + "%";
+  setVal($("#errr"), Math.round(st.error_ratio * 100)); $("#err-val").textContent = Math.round(st.error_ratio * 100) + "%";
+  setChk($("#logs-on"), st.logs_enabled);
+  for (const [k, v] of Object.entries(st.sources)) setChk($("#src-" + k), v);
+  setVal($("#nodes"), s.topology.nodes_per_dc); setVal($("#gpn"), s.topology.gpus_per_node);
+  $("#fleet-total").textContent = `${total.toLocaleString()} GPUs on ${(total / s.topology.gpus_per_node).toLocaleString()} nodes in ${s.regions.length} regions.`;
+
+  for (const tr of $("#regions").children) {
+    const r = s.regions.find((x) => x.name === tr._name), c = tr._r;
+    setChk(c.on, r.enabled); setVal(c.load, Math.round(r.load * 100)); setVal(c.amb, r.ambient_offset);
+    c.lv.textContent = " " + Math.round(r.load * 100) + "%"; c.av.textContent = " +" + r.ambient_offset;
+    const [cu, cutil, ctemp, ckw, cf] = c.cells;
+    cu.textContent = `${r.gpus_up}/${r.gpus}`; cutil.textContent = fmt(r.avg_util, 1);
+    ctemp.textContent = r.gpus_up ? `${fmt(r.avg_temp)} / ${fmt(r.max_temp)}` : "-"; ckw.textContent = fmt(r.power_kw, 1); cf.textContent = r.gpus_faulted;
+    tr.className = r.enabled ? "" : "off";
+  }
+
+  $("#faults").replaceChildren(...(s.faults.length ? s.faults.map((f) => {
+    const b = h("button", { textContent: "Remove", className: "danger" });
+    b.onclick = () => act(() => api("DELETE", `/api/faults/${f.id}`));
+    const extra = Object.keys(f.params).length ? " " + JSON.stringify(f.params) : "";
+    return h("tr", {}, h("td", { textContent: f.label + extra }), h("td", { className: "wrap", textContent: scopeText(f.scope) }),
+      h("td", { className: "num", textContent: Math.round(f.intensity * 100) + "%" }),
+      h("td", { className: "num", textContent: f.remaining_s === null ? "until cleared" : f.remaining_s + "s" }), h("td", {}, b));
+  }) : [h("tr", {}, h("td", { colSpan: 5, className: "muted", textContent: "No active faults." }))]));
+}
+
+async function renderTail() {
+  const q = new URLSearchParams({ limit: 100, level: $("#t-level").value, region: $("#t-region").value });
+  const logs = await api("GET", "/api/logs?" + q);
+  $("#tail").replaceChildren(...logs.map((l) => h("tr", {},
+    h("td", { textContent: l._time.slice(11, 23) }), h("td", { className: "lvl-" + l.level, textContent: l.level }),
+    h("td", { textContent: l.region }), h("td", { textContent: l.node }), h("td", { textContent: l.gpu ?? "" }),
+    h("td", { textContent: l.app }), h("td", { className: "wrap", textContent: l._msg }))));
+}
+
+async function refresh() {
+  try { state = await api("GET", "/api/state"); render(); await renderTail(); }
+  catch (e) { $("#chips").replaceChildren(chip("simulator", "unreachable", "bad")); }
+}
+
+(async () => {
+  try {
+    [meta, topo, state] = await Promise.all([api("GET", "/api/meta"), api("GET", "/api/topology"), api("GET", "/api/state")]);
+  } catch (e) { toast(e.message, true); return; }
+  build(); render(); renderTail();
+  $("#t-level").onchange = $("#t-region").onchange = renderTail;
+  setInterval(refresh, 2000);
+})();
+</script>
+</body>
+</html>

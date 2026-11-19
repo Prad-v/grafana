@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GPU observability stack - user guide</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2328; }
+      code, pre { background: #f2f4f7; border-radius: 4px; }
+      code { padding: 0.1rem 0.3rem; }
+      pre { padding: 0.8rem 1rem; overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
+      th, td { border: 1px solid #d0d7de; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+      nav a { margin-right: 1rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>GPU observability stack</h1>
+      <p>A mock multi-region NVIDIA GPU fleet that feeds VictoriaMetrics and VictoriaLogs, shown in Grafana, with Keycloak sign-in, mcp-grafana for AI agents, and a web UI to control it all. Everything runs in containers with one <code>make</code> command.</p>
+      <nav>
+        <a href="#feature-list">Features</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#ui">Control UI</a>
+        <a href="#faults">Faults</a>
+        <a href="#labels">Labels</a>
+        <a href="#api">API</a>
+        <a href="#targets">Targets</a>
+        <a href="#settings">Settings</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+        <a href="#changelog">Changelog</a>
+      </nav>
+      <p>Related guides: <a href="../docker-compose/index.html">Build and deploy Grafana with Docker Compose</a>, <a href="../team-sync-oss/index.html">Team sync for OAuth in Grafana OSS</a>, <a href="../chat-assistant/index.html">Kekaflow chat assistant</a>.</p>
+    </header>
+
+    <main>
+      <section id="feature-list">
+        <h2>Features</h2>
+        <ul>
+          <li>Simulates 6 regions, 12 datacenters, and 384 NVIDIA GPUs by default (H100, H200, A100, L40S, and B200 boards).</li>
+          <li>Exports the metrics of NVIDIA's DCGM exporter: utilization, memory, temperature, power, clocks, throttling, Xid, ECC, PCIe, and NVLink.</li>
+          <li>Generates logs from the kernel, DCGM, fabric manager, device plugin, and training, inference, and batch workloads.</li>
+          <li>Uses the same labels on metrics and logs, so you can jump from a series to the logs of the same GPU.</li>
+          <li>Injects faults at any scope, from the whole fleet down to one GPU, with a web UI and a JSON API.</li>
+          <li>Provisions Grafana data sources and the <em>GPU fleet overview</em> dashboard.</li>
+          <li>Adds mcp-grafana so AI agents can query dashboards and data.</li>
+          <li>Includes Keycloak single sign-on with two demo tenants.</li>
+        </ul>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <p>Start everything: the observability services, Keycloak, Grafana, and mcp-grafana. This reuses the Grafana image. Run <code>make stack-deploy</code> instead to build it first.</p>
+        <pre>make stack-up</pre>
+        <p>To run only VictoriaMetrics, VictoriaLogs, and the simulator:</p>
+        <pre>make obs-up</pre>
+        <table>
+          <thead><tr><th>Service</th><th>Address</th><th>Sign in</th></tr></thead>
+          <tbody>
+            <tr><td>Simulator UI</td><td><a href="http://localhost:8090">http://localhost:8090</a></td><td>None</td></tr>
+            <tr><td>Grafana</td><td><a href="http://localhost:3000">http://localhost:3000</a></td><td><code>admin</code> / <code>admin</code>, or Sign in with Keycloak</td></tr>
+            <tr><td>VictoriaMetrics</td><td><a href="http://localhost:8428/vmui">http://localhost:8428/vmui</a></td><td>None</td></tr>
+            <tr><td>VictoriaLogs</td><td><a href="http://localhost:9428/select/vmui">http://localhost:9428/select/vmui</a></td><td>None</td></tr>
+            <tr><td>Keycloak</td><td><a href="http://localhost:8080">http://localhost:8080</a></td><td>Values in <code>.env</code></td></tr>
+            <tr><td>mcp-grafana</td><td><code>http://localhost:8000/mcp</code></td><td>None</td></tr>
+          </tbody>
+        </table>
+        <p>In Grafana, open Dashboards, then GPU fleet, then GPU fleet overview (plugin data source) or GPU fleet overview (Prometheus API), and open both side by side to compare. The first start needs access to <code>grafana.com</code> to install the VictoriaMetrics and VictoriaLogs plugins. Grafana has three data sources: <strong>VictoriaMetrics</strong> (official plugin, used by the dashboard), <strong>VictoriaMetrics (Prometheus API)</strong> (for alerting and mcp-grafana), and <strong>VictoriaLogs</strong>.</p>
+      </section>
+
+      <section id="ui">
+        <h2>Control UI</h2>
+        <p>Open <a href="http://localhost:8090">http://localhost:8090</a>. The page refreshes every two seconds.</p>
+        <ul>
+          <li><strong>Scenarios:</strong> one click applies a preset: <code>healthy</code>, <code>heatwave</code>, <code>training-surge</code>, <code>xid-storm</code>, <code>region-outage</code>, <code>gpu-lost</code>, or <code>chaos</code>.</li>
+          <li><strong>Fleet:</strong> pause or resume, reset, set the global load and sensor noise, and resize the fleet (nodes per datacenter and GPUs per node, up to 4096 GPUs).</li>
+          <li><strong>Regions:</strong> switch a region off to cut all of its metrics and logs, and set a load multiplier and ambient temperature offset. The table shows GPUs up, utilization, temperature, power, and faulted GPUs.</li>
+          <li><strong>Inject a fault:</strong> choose a fault, a scope (region, datacenter, node, GPU), an intensity, and a duration. Active faults are listed with their remaining time and can be removed.</li>
+          <li><strong>Logs:</strong> set the background rate and the share of warnings and errors, switch sources on and off, and emit a burst of lines at a scope.</li>
+          <li><strong>Live log tail:</strong> filter the generated logs by level and region.</li>
+        </ul>
+      </section>
+
+      <section id="faults">
+        <h2>Faults</h2>
+        <table>
+          <thead><tr><th>Fault</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>thermal</code></td><td>Cooling failure: GPUs heat up, throttle, and log slowdown warnings.</td></tr>
+            <tr><td><code>power_cap</code></td><td>Limits board power, so power violations grow and clocks drop.</td></tr>
+            <tr><td><code>xid</code></td><td>Xid errors in the kernel log and in <code>DCGM_FI_DEV_XID_ERRORS</code>. Pick a code or leave it random.</td></tr>
+            <tr><td><code>ecc</code></td><td>Single-bit errors, and double-bit errors with row remapping above intensity 0.5.</td></tr>
+            <tr><td><code>nvlink</code></td><td>CRC and replay errors and lower bandwidth. No effect on boards without NVLink.</td></tr>
+            <tr><td><code>pcie</code></td><td>PCIe replays and a link that retrains at a lower generation or width.</td></tr>
+            <tr><td><code>mem_leak</code></td><td>Fills the framebuffer until the workload logs CUDA out-of-memory errors.</td></tr>
+            <tr><td><code>load</code></td><td>Pins utilization to a value.</td></tr>
+            <tr><td><code>gpu_lost</code></td><td>Xid 79: the GPU disappears from metrics and the device plugin marks it unhealthy.</td></tr>
+            <tr><td><code>node_down</code></td><td>The node stops exporting metrics and logs.</td></tr>
+          </tbody>
+        </table>
+        <p>A duration of <code>0</code> lasts until you clear the fault.</p>
+      </section>
+
+      <section id="labels">
+        <h2>Fleet and labels</h2>
+        <table>
+          <thead><tr><th>Region</th><th>City</th><th>GPU</th><th>Datacenters</th></tr></thead>
+          <tbody>
+            <tr><td><code>us-east-1</code></td><td>N. Virginia</td><td>H100</td><td><code>iad1</code>, <code>iad2</code></td></tr>
+            <tr><td><code>us-west-2</code></td><td>Oregon</td><td>H200</td><td><code>pdx1</code>, <code>pdx2</code></td></tr>
+            <tr><td><code>eu-west-1</code></td><td>Ireland</td><td>A100</td><td><code>dub1</code>, <code>dub2</code></td></tr>
+            <tr><td><code>eu-central-1</code></td><td>Frankfurt</td><td>H100</td><td><code>fra1</code>, <code>fra2</code></td></tr>
+            <tr><td><code>ap-south-1</code></td><td>Mumbai</td><td>L40S</td><td><code>bom1</code>, <code>bom2</code></td></tr>
+            <tr><td><code>ap-northeast-1</code></td><td>Tokyo</td><td>B200</td><td><code>nrt1</code>, <code>nrt2</code></td></tr>
+          </tbody>
+        </table>
+        <p>Metrics and logs share these labels: <code>region</code>, <code>availability_zone</code>, <code>datacenter</code>, <code>cluster</code>, <code>rack</code>, <code>node</code>, <code>gpu</code>, <code>UUID</code>, <code>modelName</code>, and, for GPUs that run a workload, <code>namespace</code>, <code>pod</code>, and <code>container</code>. Logs add <code>app</code> and <code>level</code>, and <code>xid</code> on Xid events.</p>
+        <p>Examples:</p>
+        <pre>avg by (region) (DCGM_FI_DEV_GPU_UTIL)                  # PromQL, VictoriaMetrics
+node:"gpu-iad1-r01-n01" level:in(warn,error)            # LogsQL, VictoriaLogs</pre>
+      </section>
+
+      <section id="api">
+        <h2>Simulator API</h2>
+        <p>The UI uses this JSON API. It has no authentication, so keep the port on your local machine. Invalid input returns status <code>400</code> with <code>{"error": "..."}</code>.</p>
+        <table>
+          <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>GET</td><td><code>/api/state</code></td><td>Settings, region aggregates, faults, and log shipping status.</td></tr>
+            <tr><td>PUT</td><td><code>/api/settings</code></td><td>Global settings.</td></tr>
+            <tr><td>PUT</td><td><code>/api/regions/{region}</code></td><td><code>enabled</code>, <code>load</code>, <code>ambient_offset</code>.</td></tr>
+            <tr><td>PUT</td><td><code>/api/topology</code></td><td><code>nodes_per_dc</code>, <code>gpus_per_node</code>.</td></tr>
+            <tr><td>POST</td><td><code>/api/faults</code></td><td>Inject a fault.</td></tr>
+            <tr><td>DELETE</td><td><code>/api/faults/{id}</code>, <code>/api/faults</code></td><td>Remove one or all faults.</td></tr>
+            <tr><td>POST</td><td><code>/api/logs/burst</code></td><td>Emit log lines at once.</td></tr>
+            <tr><td>POST</td><td><code>/api/presets/{name}</code></td><td>Apply a preset.</td></tr>
+            <tr><td>POST</td><td><code>/api/reset</code></td><td>Reboot the fleet and restore defaults.</td></tr>
+            <tr><td>GET</td><td><code>/metrics</code>, <code>/sim/metrics</code>, <code>/healthz</code></td><td>Prometheus metrics and health.</td></tr>
+          </tbody>
+        </table>
+        <pre>curl -X POST http://localhost:8090/api/faults \
+  -H 'Content-Type: application/json' \
+  -d '{"kind": "thermal", "scope": {"region": "eu-west-1", "datacenter": "dub1"}, "duration_s": 900, "intensity": 0.8}'</pre>
+        <p>The full schema is in the <a href="../../sources/developers/observability-stack.md">documentation</a>.</p>
+      </section>
+
+      <section id="mcp">
+        <h2>Connect an AI agent</h2>
+        <p>mcp-grafana listens at <code>http://localhost:8000/mcp</code>. Add it to your MCP client, for example in <code>.cursor/mcp.json</code>:</p>
+        <pre>{ "mcpServers": { "grafana": { "url": "http://localhost:8000/mcp" } } }</pre>
+        <p>It signs in as the Grafana admin from <code>.env</code> by default. Set <code>MCP_GRAFANA_TOKEN</code> to use a service account token instead.</p>
+      </section>
+
+      <section id="targets">
+        <h2>Make targets</h2>
+        <table>
+          <thead><tr><th>Target</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>obs-up</code></td><td>Start VictoriaMetrics, VictoriaLogs, and the simulator.</td></tr>
+            <tr><td><code>obs-test</code></td><td>Check that metrics and logs flow end to end.</td></tr>
+            <tr><td><code>obs-logs</code>, <code>obs-down</code>, <code>obs-clean</code></td><td>Follow logs, stop (keep data), stop and delete data.</td></tr>
+            <tr><td><code>sim-test</code></td><td>Run the simulator unit tests in a container.</td></tr>
+            <tr><td><code>stack-up</code></td><td>Start everything, reusing the built Grafana image.</td></tr>
+            <tr><td><code>stack-deploy</code></td><td>Build the Grafana image, then start everything.</td></tr>
+            <tr><td><code>stack-test</code></td><td>Check the full stack, including Grafana and mcp-grafana.</td></tr>
+            <tr><td><code>stack-ps</code>, <code>stack-logs</code>, <code>stack-down</code></td><td>Status, logs, and stop (keep data).</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="settings">
+        <h2>Settings</h2>
+        <p>Set these in <code>.env</code>. <code>make obs-env</code> appends them with their defaults, and all are optional.</p>
+        <table>
+          <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>OBS_BIND_ADDRESS</code></td><td><code>127.0.0.1</code></td><td>Address the simulator, VictoriaMetrics, VictoriaLogs, and mcp-grafana ports are published on. None has authentication.</td></tr>
+            <tr><td><code>VICTORIAMETRICS_TAG</code> / <code>VICTORIAMETRICS_PORT</code></td><td><code>v1.156.0</code> / <code>8428</code></td><td>Image tag and host port.</td></tr>
+            <tr><td><code>VICTORIALOGS_TAG</code> / <code>VICTORIALOGS_PORT</code></td><td><code>v1.54.0</code> / <code>9428</code></td><td>Image tag and host port.</td></tr>
+            <tr><td><code>OBS_RETENTION</code></td><td><code>7d</code></td><td>Retention of metrics and logs.</td></tr>
+            <tr><td><code>GPU_SIM_PORT</code></td><td><code>8090</code></td><td>Simulator UI and API port.</td></tr>
+            <tr><td><code>GPU_SIM_NODES_PER_DC</code> / <code>GPU_SIM_GPUS_PER_NODE</code></td><td><code>4</code> / <code>8</code></td><td>Fleet size at start.</td></tr>
+            <tr><td><code>GPU_SIM_TICK_SECONDS</code></td><td><code>5</code></td><td>Seconds between simulation steps.</td></tr>
+            <tr><td><code>GPU_SIM_LOG_RATE</code></td><td><code>0.2</code></td><td>Background log lines per node per second.</td></tr>
+            <tr><td><code>GPU_SIM_SEED</code></td><td>empty</td><td>A number makes the simulation repeatable.</td></tr>
+            <tr><td><code>MCP_GRAFANA_TAG</code> / <code>MCP_GRAFANA_PORT</code></td><td><code>2.3.0-alpine</code> / <code>8000</code></td><td>Image tag and host port.</td></tr>
+            <tr><td><code>MCP_GRAFANA_TOKEN</code></td><td>empty</td><td>Grafana service account token. When empty, the admin user is used.</td></tr>
+          </tbody>
+        </table>
+        <p>This stack is for local development and demos. For production Kubernetes deployments, use Helm.</p>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <ul>
+          <li><strong>VictoriaMetrics or VictoriaLogs data source missing:</strong> Grafana installs the plugins on start and needs access to <code>grafana.com</code>. Run <code>make stack-logs</code>, look for <code>plugin.installer</code>, then run <code>make stack-up</code> again.</li>
+          <li><strong>Dashboard has no data:</strong> wait about 30 seconds after a start, then open <a href="http://localhost:8428/targets">http://localhost:8428/targets</a> and check that <code>dcgm-exporter</code> is up.</li>
+          <li><strong>No logs:</strong> check <em>ship errors</em> in the simulator header and that <em>Generate logs</em> is on.</li>
+          <li><strong>Port in use:</strong> set the matching <code>*_PORT</code> variable in <code>.env</code>.</li>
+          <li><strong>mcp-grafana returns 403:</strong> connect through <code>localhost</code>, <code>127.0.0.1</code>, or <code>mcp-grafana</code> with the configured port.</li>
+          <li><strong>Tenant users see no data sources:</strong> provisioning applies to the main organization only.</li>
+          <li><strong>Clean slate:</strong> <code>make stack-down</code>, <code>make obs-clean</code>, then <code>make stack-up</code>.</li>
+        </ul>
+      </section>
+
+      <section id="changelog">
+        <h2>Changelog</h2>
+        <ul>
+          <li>Added <code>docker-compose.observability.yml</code> with VictoriaMetrics, VictoriaLogs, and the GPU simulator (<code>backend/services/gpu-simulator</code>).</li>
+          <li>Added the simulator control UI and API: presets, fault injection at any scope, region switches, and log bursts.</li>
+          <li>Added <code>docker-compose.observability-grafana.yml</code>: provisioned data sources, the GPU fleet overview dashboard, and mcp-grafana.</li>
+          <li>Added the <em>GPU fleet overview (Prometheus API)</em> dashboard, a copy of the main dashboard on the Prometheus-type data source, for side-by-side comparison.</li>
+          <li>Switched the VictoriaMetrics data source and the dashboard to the official <code>victoriametrics-metrics-datasource</code> plugin, and kept a Prometheus-type data source for alerting and mcp-grafana.</li>
+          <li>Added <code>make obs-*</code>, <code>make sim-test</code>, and <code>make stack-*</code> targets, and CI jobs that run the new tests.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

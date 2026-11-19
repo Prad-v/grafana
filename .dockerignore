@@ -23,3 +23,5 @@ devenv
 .nx
 scripts/grafana-server/tmp
 devenv/mt-tilt
+
+.env

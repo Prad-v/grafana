@@ -1,0 +1,91 @@
+name: Tests folder (Docker Compose)
+
+# Runs everything under tests/ in a container on every commit.
+on:
+  pull_request:
+  push:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests/ (unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Run tests in Docker Compose
+        run: docker compose -f tests/docker-compose.yml run --rm test
+      - name: Run GPU simulator unit tests
+        run: docker compose -f tests/docker-compose.yml run --rm sim-unit
+      - name: Run anomaly engine unit tests
+        run: docker compose -f tests/docker-compose.yml run --rm anomaly-engine-unit
+      - name: Run chat agent unit tests
+        run: docker compose -f tests/docker-compose.yml run --rm chat-agent-unit
+      - name: Run chat plugin unit tests
+        run: docker compose -f tests/docker-compose.yml run --rm chat-plugin-unit
+      - name: Build the chat plugin (typecheck and bundle)
+        run: docker build -t kekaflow/chat-plugin:ci plugins/kekaflow-chat-app
+      - name: Lint and render the Helm chart, and test the version bump
+        run: docker compose -f tests/docker-compose.yml run --rm helm-chart
+      - name: Tear down
+        if: always()
+        run: docker compose -f tests/docker-compose.yml down --volumes
+
+  # Fast: builds only the simulator image, no Grafana.
+  obs-e2e:
+    name: tests/ (VictoriaMetrics, VictoriaLogs and GPU simulator end-to-end)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Start VictoriaMetrics, VictoriaLogs and the GPU simulator
+        run: make obs-up
+      - name: Check metrics and logs flow end to end
+        run: make obs-test
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.observability.yml logs --tail=200 || true
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.observability.yml down --volumes --remove-orphans || true
+
+  sso-e2e:
+    name: tests/ (Keycloak and full stack end-to-end)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Build Grafana and start Keycloak with Grafana
+        run: make sso-deploy
+      - name: Log in through Keycloak and check orgs and teams
+        run: make sso-test
+      - name: Add the observability services and mcp-grafana
+        run: make stack-up
+      - name: Check metrics, logs, Grafana and mcp-grafana
+        run: make stack-test
+      - name: Check the chat assistant through Grafana's plugin proxy
+        run: make chat-e2e
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.keycloak.yml logs --tail=200 keycloak || true
+          docker compose -f docker-compose.yml -f docker-compose.sso.yml -f docker-compose.observability-grafana.yml -f docker-compose.chat.yml logs --tail=200 grafana mcp-grafana chat-agent || true
+          docker compose -f docker-compose.observability.yml logs --tail=200 || true
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.sso.yml -f docker-compose.observability-grafana.yml -f docker-compose.chat.yml down --volumes --remove-orphans || true
+          docker compose -f docker-compose.keycloak.yml down --volumes --remove-orphans || true
+          docker compose -f docker-compose.observability.yml down --volumes --remove-orphans || true

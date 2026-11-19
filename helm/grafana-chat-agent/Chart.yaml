@@ -1,0 +1,7 @@
+apiVersion: v2
+name: grafana-chat-agent
+description: Google ADK and Claude agent behind the Kekaflow chat assistant for Grafana.
+type: application
+# CI bumps both versions on every successful commit to the main branch.
+version: 0.1.0
+appVersion: "0.1.0"

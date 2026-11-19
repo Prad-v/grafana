@@ -1,0 +1,64 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "app",
+  "name": "Kekaflow Assistant",
+  "id": "kekaflow-chat-app",
+  "info": {
+    "keywords": ["assistant", "ai", "chat", "claude", "anomaly", "mcp"],
+    "description": "Ask questions about metrics, logs, alerts and anomalies in plain language. Answers come from live data through Grafana's MCP server and an anomaly-detection toolkit.",
+    "author": {
+      "name": "Kekaflow"
+    },
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "version": "1.0.0",
+    "updated": "2026-11-19"
+  },
+  "includes": [
+    {
+      "type": "page",
+      "name": "Assistant",
+      "path": "/a/kekaflow-chat-app",
+      "role": "Viewer",
+      "addToNav": true,
+      "defaultNav": true,
+      "icon": "comments-alt"
+    }
+  ],
+  "dependencies": {
+    "grafanaDependency": ">=12.0.0",
+    "plugins": []
+  },
+  "routes": [
+    {
+      "path": "agent/*",
+      "method": "*",
+      "url": "{{ .JsonData.agentUrl }}",
+      "reqRole": "Viewer",
+      "headers": [
+        {
+          "name": "Authorization",
+          "content": "Bearer {{ .SecureJsonData.agentToken }}"
+        },
+        {
+          "name": "X-LLM-Provider",
+          "content": "{{ .JsonData.llmProvider }}"
+        },
+        {
+          "name": "X-LLM-Base-Url",
+          "content": "{{ .JsonData.llmBaseUrl }}"
+        },
+        {
+          "name": "X-LLM-Model",
+          "content": "{{ .JsonData.llmModel }}"
+        },
+        {
+          "name": "X-LLM-Api-Key",
+          "content": "{{ .SecureJsonData.llmApiKey }}"
+        }
+      ]
+    }
+  ]
+}

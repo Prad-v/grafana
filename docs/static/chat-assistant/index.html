@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kekaflow chat assistant - user guide</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2328; }
+      code, pre { background: #f2f4f7; border-radius: 4px; }
+      code { padding: 0.1rem 0.3rem; }
+      pre { padding: 0.8rem 1rem; overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
+      th, td { border: 1px solid #d0d7de; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+      nav a { margin-right: 1rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Kekaflow chat assistant</h1>
+      <p>A chat page inside Grafana. Ask in plain language about any metric, logs, alerts, or unusual behavior, and a Claude model answers from live data. It is built with Google Agent Development Kit (ADK) and uses mcp-grafana for Grafana's own tools.</p>
+      <nav>
+        <a href="#feature-list">Features</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#asking">Ask a question</a>
+        <a href="#anomalies">Anomaly detection</a>
+        <a href="#api">API</a>
+        <a href="#targets">Targets</a>
+        <a href="#model">Choose the model</a>
+        <a href="#settings">Settings</a>
+        <a href="#security">Security</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+        <a href="#changelog">Changelog</a>
+      </nav>
+      <p>Related guides: <a href="../observability-stack/index.html">GPU observability stack</a>, <a href="../docker-compose/index.html">Build and deploy Grafana with Docker Compose</a>. Full reference: <a href="../../sources/developers/chat-assistant.md">chat-assistant.md</a>.</p>
+    </header>
+
+    <main>
+      <section id="feature-list">
+        <h2>Features</h2>
+        <ul>
+          <li>Answers questions about metrics, logs, alerts, and dashboards, using live data.</li>
+          <li>Finds anomalies: spikes, dips, level shifts, flatlines, and gaps, with the time they started and the labels the affected series share.</li>
+          <li>Streams the answer as it is written, and shows every tool call so you can see the query that ran.</li>
+          <li>Read-only by default: tools that change Grafana are blocked.</li>
+          <li>Runs as a Grafana app plugin. Grafana checks the login and keeps the agent's token secret.</li>
+          <li>Keeps a separate conversation for each user.</li>
+          <li>Lets an organization admin choose the model on a Settings page: Anthropic directly, or any model behind a LiteLLM proxy. Save and test confirms that it answers.</li>
+        </ul>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <p>The assistant is part of the full stack. Start it with the observability services, Keycloak, Grafana, and mcp-grafana. This reuses the Grafana image. Run <code>make stack-deploy</code> instead to build it first.</p>
+        <pre>make stack-up</pre>
+        <p>The command creates <code>CHAT_AGENT_TOKEN</code> in <code>.env</code>. Add your Claude API key there, then recreate the agent:</p>
+        <pre>ANTHROPIC_API_KEY=&lt;YOUR_API_KEY&gt;     # in .env
+
+make chat-restart</pre>
+        <p>Open <a href="http://localhost:3000/a/kekaflow-chat-app">http://localhost:3000/a/kekaflow-chat-app</a>, or choose More apps, then Kekaflow Assistant, in the Grafana menu. The header shows the model, the number of Grafana tools, and Read-only. Without a model, every question answers with "No API key is configured". Either set the key as above, or choose the model on the Settings page (see <a href="#model">Choose the model</a>).</p>
+      </section>
+
+      <section id="asking">
+        <h2>Ask a question</h2>
+        <p>Pick a suggestion or type your own. Press Enter to send and Shift+Enter for a new line. Choose Stop to cancel an answer, and New chat to start over. Open a tool call to see its query and result.</p>
+        <table>
+          <thead><tr><th>Topic</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td>Metrics</td><td>Which GPUs are running hottest right now? Group them by region.</td></tr>
+            <tr><td>Logs</td><td>Did the number of error logs change in the last hour? Which nodes log the most errors?</td></tr>
+            <tr><td>Alerts</td><td>Which alert rules are firing or pending right now?</td></tr>
+            <tr><td>Dashboards</td><td>Summarize the GPU fleet overview dashboard and what each panel shows.</td></tr>
+            <tr><td>Anomalies</td><td>Is there anything unusual in GPU temperature over the last 3 hours? Tell me when it started and where.</td></tr>
+          </tbody>
+        </table>
+        <p>Name a time range when it matters. The assistant knows the current time. The conversation is kept in the browser tab until you close it.</p>
+      </section>
+
+      <section id="anomalies">
+        <h2>Anomaly detection</h2>
+        <p>The built-in tools <code>detect_metric_anomalies</code> and <code>detect_log_anomalies</code> analyze every series a query returns and rank them. They use the median and the median absolute deviation, so a few extreme points don't distort the baseline.</p>
+        <table>
+          <thead><tr><th>Finding</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>spike</code> / <code>dip</code></td><td>A short run of points far above or below the baseline.</td></tr>
+            <tr><td><code>level_shift</code></td><td>The series moved to a new level and stayed. The timestamp is the best-fit step.</td></tr>
+            <tr><td><code>flatline</code></td><td>A series that normally varies became constant.</td></tr>
+            <tr><td><code>gap</code></td><td>Samples are missing for four steps or more.</td></tr>
+          </tbody>
+        </table>
+        <ul>
+          <li><strong>Cycles:</strong> repeating workloads are detected and compared with the same phase of the cycle, so normal cycling isn't reported.</li>
+          <li><strong>Shared labels:</strong> it reports the label values the anomalous series share, for example <code>datacenter=dub1</code>, with their coverage and lift.</li>
+          <li><strong>Simultaneous changes:</strong> it reports when many series changed at once.</li>
+        </ul>
+        <p>Limits: use a window that includes normal behavior, at least a few times longer than the anomaly. A series needs 12 points. Up to 300 series are analyzed per query. The default sensitivity is 4.5 robust standard deviations. Ask for 3 to see more, or 7 to see only clear ones. The anomaly tools read VictoriaMetrics and VictoriaLogs only.</p>
+      </section>
+
+      <section id="api">
+        <h2>Agent API</h2>
+        <p>Grafana exposes the agent at <code>/api/plugin-proxy/kekaflow-chat-app/agent/</code> and adds the token. Calling the agent directly needs <code>Authorization: Bearer &lt;CHAT_AGENT_TOKEN&gt;</code>, except for <code>/healthz</code>.</p>
+        <table>
+          <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>GET</td><td><code>/healthz</code></td><td>Health. No token.</td></tr>
+            <tr><td>GET</td><td><code>/config</code></td><td>Model, MCP state and tool names, built-in tools, limits.</td></tr>
+            <tr><td>POST</td><td><code>/chat</code></td><td>Ask a question, streamed as server-sent events.</td></tr>
+            <tr><td>POST</td><td><code>/llm/test</code></td><td>One small request with the model in the <code>X-LLM-*</code> headers. Returns <code>{"ok": true}</code> or <code>{"ok": false, "error"}</code>.</td></tr>
+            <tr><td>GET</td><td><code>/llm/models</code></td><td>Models the provider offers for the <code>X-LLM-*</code> headers.</td></tr>
+            <tr><td>DELETE</td><td><code>/sessions/{sessionId}</code></td><td>Forget a conversation.</td></tr>
+          </tbody>
+        </table>
+        <pre>curl -N -H "Authorization: Bearer $CHAT_AGENT_TOKEN" -H "X-Grafana-User: me" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How many GPUs are reporting?", "session_id": "demo-session-1"}' \
+  http://localhost:8081/chat</pre>
+        <table>
+          <thead><tr><th>Event</th><th>Data</th></tr></thead>
+          <tbody>
+            <tr><td><code>session</code></td><td><code>{"session_id"}</code>. Always first.</td></tr>
+            <tr><td><code>tool_call</code></td><td><code>{"id", "name", "args"}</code></td></tr>
+            <tr><td><code>tool_result</code></td><td><code>{"id", "name", "ok", "preview"}</code></td></tr>
+            <tr><td><code>text</code></td><td><code>{"delta"}</code>, a piece of the answer.</td></tr>
+            <tr><td><code>error</code></td><td><code>{"message"}</code>, safe to show users.</td></tr>
+            <tr><td><code>done</code></td><td><code>{"input_tokens", "output_tokens"}</code>. Always last.</td></tr>
+          </tbody>
+        </table>
+        <p>Errors before the stream starts return <code>{"error": "..."}</code> with status <code>400</code>, <code>401</code>, <code>409</code>, or <code>413</code>.</p>
+      </section>
+
+      <section id="targets">
+        <h2>Make targets</h2>
+        <table>
+          <thead><tr><th>Target</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>chat-env</code></td><td>Add the chat settings to <code>.env</code> and generate <code>CHAT_AGENT_TOKEN</code>.</td></tr>
+            <tr><td><code>chat-build</code></td><td>Build the agent and plugin images.</td></tr>
+            <tr><td><code>chat-test</code></td><td>Run the agent and plugin unit tests in containers.</td></tr>
+            <tr><td><code>chat-e2e</code></td><td>Check the agent through Grafana's plugin proxy (needs <code>make stack-up</code>).</td></tr>
+            <tr><td><code>chat-logs</code>, <code>chat-restart</code></td><td>Follow the agent logs, recreate the agent.</td></tr>
+            <tr><td><code>stack-up</code></td><td>Start everything, including the assistant.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="model">
+        <h2>Choose the model</h2>
+        <p>By default the agent uses <code>CHAT_AGENT_MODEL</code> and <code>ANTHROPIC_API_KEY</code> from <code>.env</code>. An organization admin can pick another model without a restart:</p>
+        <ol>
+          <li>In Grafana, open Administration, Plugins and data, Plugins, then Kekaflow Assistant.</li>
+          <li>Select the Settings tab and choose a provider under Language model.</li>
+          <li>Select Save and test. The page shows whether the model answered, how long it took, and why it failed if it didn't.</li>
+        </ol>
+        <table>
+          <thead><tr><th>Provider</th><th>Fields</th></tr></thead>
+          <tbody>
+            <tr><td>Agent default</td><td>None. Uses the agent's own model and key.</td></tr>
+            <tr><td>Anthropic</td><td>Model, for example <code>claude-sonnet-5-5</code>. API key; leave it empty to use <code>ANTHROPIC_API_KEY</code>.</td></tr>
+            <tr><td>LiteLLM proxy</td><td>Proxy address, for example <code>http://litellm:4000</code>. Model, the name your proxy exposes. API key, if the proxy needs one.</td></tr>
+          </tbody>
+        </table>
+        <p>The choice applies to the whole organization, and only admins can change it. Grafana stores the key encrypted and never returns it to the browser. The agent doesn't store it.</p>
+        <p>The agent only calls hosts listed in <code>CHAT_AGENT_ALLOWED_LLM_HOSTS</code> (default <code>api.anthropic.com,litellm,fake-llm</code>; remove <code>fake-llm</code>, the test stand-in, for shared deployments). A host name matches any port, and <code>host:port</code> matches one port. Run <code>make chat-restart</code> after you change it.</p>
+        <pre>CHAT_AGENT_ALLOWED_LLM_HOSTS=api.anthropic.com,litellm,litellm.internal:4000</pre>
+        <p>Grafana replaces the plugin settings with its provisioning file on every start, so a model chosen on the Settings page resets on restart unless you also set it in <code>.env</code>, then run <code>make stack-up</code>:</p>
+        <pre>CHAT_LLM_PROVIDER=litellm     # empty, anthropic, or litellm
+CHAT_LLM_BASE_URL=http://litellm:4000
+CHAT_LLM_MODEL=claude-sonnet
+CHAT_LLM_API_KEY=&lt;YOUR_PROXY_KEY&gt;</pre>
+      </section>
+
+      <section id="settings">
+        <h2>Settings</h2>
+        <p>Set these in <code>.env</code>. <code>make chat-env</code> appends them.</p>
+        <table>
+          <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>CHAT_AGENT_TOKEN</code></td><td>generated</td><td>Shared secret between Grafana and the agent. Required.</td></tr>
+            <tr><td><code>ANTHROPIC_API_KEY</code></td><td>empty</td><td>Claude API key.</td></tr>
+            <tr><td><code>CHAT_AGENT_MODEL</code></td><td><code>anthropic/claude-sonnet-5-5</code></td><td>Any model LiteLLM can reach with the key.</td></tr>
+            <tr><td><code>CHAT_AGENT_ALLOWED_LLM_HOSTS</code></td><td><code>api.anthropic.com,litellm,fake-llm</code></td><td>Hosts the Settings page may point the agent at.</td></tr>
+            <tr><td><code>CHAT_LLM_PROVIDER</code>, <code>CHAT_LLM_BASE_URL</code>, <code>CHAT_LLM_MODEL</code>, <code>CHAT_LLM_API_KEY</code></td><td>empty</td><td>Provision the model on Grafana's side so it survives a restart.</td></tr>
+            <tr><td><code>CHAT_AGENT_PORT</code></td><td><code>8081</code></td><td>Host port for debugging, bound to <code>127.0.0.1</code>.</td></tr>
+            <tr><td><code>CHAT_AGENT_ALLOW_WRITES</code></td><td><code>false</code></td><td>Allow tools that change Grafana.</td></tr>
+            <tr><td><code>CHAT_AGENT_EXTRA_INSTRUCTION</code></td><td>empty</td><td>Text appended to the system prompt.</td></tr>
+            <tr><td><code>CHAT_AGENT_LOG_LEVEL</code></td><td><code>INFO</code></td><td>Log level.</td></tr>
+          </tbody>
+        </table>
+        <p>Advanced settings of the agent service, such as <code>MCP_GRAFANA_URL</code>, <code>CHAT_AGENT_METRICS_URL</code>, <code>CHAT_AGENT_LOGS_URL</code>, <code>CHAT_AGENT_MAX_LLM_CALLS</code>, and the session limits, are in the <a href="../../sources/developers/chat-assistant.md">reference</a>.</p>
+      </section>
+
+      <section id="security">
+        <h2>Security</h2>
+        <ul>
+          <li>Grafana stores the token encrypted and never sends it to the browser. Any signed-in user with the Viewer role can open the page.</li>
+          <li>The agent reads with the permissions of mcp-grafana, not with those of the person asking. By default mcp-grafana signs in as the Grafana admin, and the anomaly tools read the Victoria data without per-tenant filtering. In the two-tenant Keycloak demo, every user who can open the page can ask about every tenant's data. Set <code>MCP_GRAFANA_TOKEN</code> to a scoped service account before you share the page with tenants who must stay apart.</li>
+          <li>Questions and the data that tools return are sent to the provider you chose: Anthropic, or your LiteLLM proxy and the models behind it.</li>
+          <li>Only admins can change the model. The plugin proxy replaces any <code>X-LLM-*</code> headers a browser sends, and the agent only calls allowed hosts. The key travels from Grafana to the agent on every request, so use TLS between separate hosts.</li>
+          <li>Provider errors are logged and replaced with a fixed message in the browser.</li>
+        </ul>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <ul>
+          <li><strong>The assistant service is not reachable:</strong> run <code>docker compose ps chat-agent</code> and <code>make chat-logs</code>, and check that the plugin is enabled under Administration, Plugins and data.</li>
+          <li><strong>Grafana could not authenticate to the assistant service:</strong> the token differs. Both read <code>CHAT_AGENT_TOKEN</code> from <code>.env</code>. Run <code>make stack-up</code> after you change it.</li>
+          <li><strong>No API key is configured, or the key was rejected:</strong> set <code>ANTHROPIC_API_KEY</code> in <code>.env</code> and run <code>make chat-restart</code>, or enter a key on the Settings page and select Save and test.</li>
+          <li><strong>The proxy host isn't allowed:</strong> add the host to <code>CHAT_AGENT_ALLOWED_LLM_HOSTS</code> and run <code>make chat-restart</code>.</li>
+          <li><strong>The header shows "Model settings invalid":</strong> the saved settings are incomplete. Fix the field the message names on the Settings page and select Save and test.</li>
+          <li><strong>The model resets after Grafana restarts:</strong> set the <code>CHAT_LLM_*</code> variables in <code>.env</code> and run <code>make stack-up</code>.</li>
+          <li><strong>Cannot reach the model provider:</strong> the address must resolve from the agent's network. Use the service name, not <code>localhost</code>, and check <code>make chat-logs</code>.</li>
+          <li><strong>The key field says "configured" and you want none:</strong> select Reset next to the key, then Save and test.</li>
+          <li><strong>Grafana tools offline:</strong> the agent can't reach mcp-grafana. Hover over the badge for the reason, and check <code>MCP_GRAFANA_URL</code>.</li>
+          <li><strong>The plugin is missing:</strong> Grafana needs <code>GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=kekaflow-chat-app</code>, which the compose file sets. Check the Grafana log for <code>kekaflow-chat-app</code>.</li>
+          <li><strong>The anomaly tools fail:</strong> check <code>CHAT_AGENT_METRICS_URL</code> and <code>CHAT_AGENT_LOGS_URL</code>, and that the query returns data in Grafana.</li>
+          <li><strong>Other organizations don't have the page:</strong> provisioning enables it for the main organization. Enable the plugin in the other organization and set <code>agentUrl</code> and <code>agentToken</code>.</li>
+        </ul>
+      </section>
+
+      <section id="changelog">
+        <h2>Changelog</h2>
+        <ul>
+          <li>Added the <code>kekaflow-chat-app</code> Grafana app plugin: a streaming chat page with tool-call details and suggested questions.</li>
+          <li>Added the <code>grafana-chat-agent</code> service (<code>backend/services/grafana-chat-agent</code>), built with Google ADK and Claude, connected to mcp-grafana.</li>
+          <li>Added the anomaly toolkit: spikes, dips, level shifts, flatlines, gaps, cycles, shared labels, and simultaneous changes.</li>
+          <li>Added <code>docker-compose.chat.yml</code>, <code>make chat-*</code> targets, unit and end-to-end tests, and CI jobs that run them.</li>
+          <li>Added the <code>helm/grafana-chat-agent</code> chart.</li>
+          <li>Added a Settings page to the plugin to choose Anthropic or a LiteLLM proxy, with Save and test and a model list. Added <code>/llm/test</code> and <code>/llm/models</code>, the <code>CHAT_AGENT_ALLOWED_LLM_HOSTS</code> allowlist, the <code>CHAT_LLM_*</code> provisioning variables, and the chart value <code>agent.allowedLlmHosts</code>.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Anomaly detection for any metrics data source - user guide</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2328; }
+      code, pre { background: #f2f4f7; border-radius: 4px; }
+      code { padding: 0.1rem 0.3rem; }
+      pre { padding: 0.8rem 1rem; overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
+      th, td { border: 1px solid #d0d7de; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+      nav a { margin-right: 1rem; }
+      .status { background: #fff8c5; border: 1px solid #d4a72c; border-radius: 6px; padding: 0.6rem 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Anomaly detection for any metrics data source</h1>
+      <p>
+        Find spikes, dips, level shifts, flatlines, and gaps in metrics from Mimir, Prometheus, VictoriaMetrics, or any
+        Grafana data source that returns time series. OpenTelemetry metrics work through whichever of those stores them.
+      </p>
+      <p class="status">
+        <strong>Status:</strong> the detection engine is available and tested. The Grafana data source plugin and the
+        Explorer page are in development. Until they ship, ask the <a href="../chat-assistant/index.html">chat assistant</a>
+        about anomalies.
+      </p>
+      <nav>
+        <a href="#feature-list">Features</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#findings">Findings</a>
+        <a href="#settings">Settings</a>
+        <a href="#limits">Limits</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+        <a href="#changelog">Changelog</a>
+      </nav>
+      <p>Related guides: <a href="../observability-stack/index.html">GPU observability stack</a>, <a href="../chat-assistant/index.html">Chat assistant</a>.</p>
+    </header>
+
+    <main>
+      <section id="feature-list">
+        <h2>Features</h2>
+        <ul>
+          <li>Needs no training and no history beyond the window you give it. Every finding says why it was raised.</li>
+          <li>Treats a steady rhythm, such as a batch job switching on and off, as normal, and reports it separately.</li>
+          <li>Ignores changes too small to matter, however clean they are statistically.</li>
+          <li>Finds the labels that anomalous series share, such as one datacenter, and series that changed together.</li>
+          <li>Works on data frames, so it does not depend on one metrics backend.</li>
+        </ul>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <p>Run the engine tests. They run in a container, so you need only Docker and <code>make</code>.</p>
+        <pre>make anomaly-test</pre>
+        <p>The engine is a Go package at <code>backend/services/anomaly-engine/anomaly</code>. A zero <code>Options</code> value uses the defaults.</p>
+        <pre>report := anomaly.Analyze(points, anomaly.Options{})
+for _, f := range report.Findings {
+    fmt.Println(f.Kind, anomaly.ISO(f.PeakTS), f.Score, f.Detail)
+}</pre>
+      </section>
+
+      <section id="findings">
+        <h2>Findings</h2>
+        <table>
+          <thead><tr><th>Kind</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>spike</code>, <code>dip</code></td><td>A point, or a short run, far from the rolling median.</td></tr>
+            <tr><td><code>level_shift</code></td><td>The typical value moved and stayed there.</td></tr>
+            <tr><td><code>flatline</code></td><td>The value stopped changing in a series that normally moves. Often a stuck exporter.</td></tr>
+            <tr><td><code>gap</code></td><td>Samples are missing for much longer than the sampling step.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="settings">
+        <h2>Settings</h2>
+        <p>The engine has no environment variables. These options tune a detection run.</p>
+        <table>
+          <thead><tr><th>Option</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>Sensitivity</code></td><td><code>4.5</code></td><td>Score threshold in robust standard deviations. Lower finds more.</td></tr>
+            <tr><td><code>MinScale</code></td><td><code>0</code></td><td>Smallest noise level to assume. Set it for counts.</td></tr>
+            <tr><td><code>MinEffectRatio</code></td><td><code>0.05</code></td><td>Ignore changes smaller than this share of the typical value.</td></tr>
+            <tr><td><code>Trace</code></td><td><code>false</code></td><td>Also return the expected value and score for each sample, to draw a band.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="limits">
+        <h2>Limits</h2>
+        <ul>
+          <li>Run detection on the right query: use <code>rate(...)</code> for counters, because a series that only increases reports a shift.</li>
+          <li>A step in a series that repeats on a cycle is placed within a quarter of a cycle of its true position. About 1 in 100 such steps does not clear the threshold.</li>
+          <li>At sensitivity 3, ordinary noise trips now and then. The default of 4.5 almost never does.</li>
+          <li>Request at most about 1000 points per series.</li>
+        </ul>
+      </section>
+
+      <section id="roadmap">
+        <h2>Roadmap</h2>
+        <ol>
+          <li><strong>Detection engine:</strong> done.</li>
+          <li><strong>Data source plugin:</strong> wraps any data source and returns the series, an expected value, a band, and an anomaly score. Works in panels, Explore, and alert rules.</li>
+          <li><strong>Explorer page and panel menu action:</strong> find anomalies from any panel and see the likely cause.</li>
+          <li><strong>Alerting:</strong> alert rules on the wrapper data source, with no separate scheduler.</li>
+        </ol>
+        <p>Each wrapper data source is bound to one inner data source by an administrator. In open-source Grafana, the service account token it uses can query every data source in the organization, so use a dedicated service account.</p>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <table>
+          <thead><tr><th>Symptom</th><th>Cause and fix</th></tr></thead>
+          <tbody>
+            <tr><td><code>directory prefix . does not contain modules listed in go.work or their selected dependencies</code></td><td>You ran <code>go test</code> on the host. Use <code>make anomaly-test</code>.</td></tr>
+            <tr><td>A report has <code>InsufficientData</code> set</td><td>The series has fewer than 12 usable samples. Widen the time range or use a smaller step.</td></tr>
+            <tr><td>A cycling series reports a spike on the edge of a cycle</td><td>The period was detected a sample off. The engine refines it, so report a series that still does this.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="changelog">
+        <h2>Changelog</h2>
+        <ul>
+          <li><strong>2026-11-19:</strong> Added the Go detection engine, ported from the chat agent's detector with identical results on 100 test series. It also finds the period of a jittery cycle correctly in 300 of 300 series, up from 268 of 300.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

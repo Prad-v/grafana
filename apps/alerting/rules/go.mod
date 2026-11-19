@@ -4,8 +4,8 @@ go 1.27.3
 
 require (
 	github.com/getkin/kin-openapi v0.152.0
-	github.com/grafana/grafana-app-sdk v0.62.1
-	github.com/grafana/grafana-app-sdk/logging v0.62.1
+	github.com/grafana/grafana-app-sdk v0.63.0
+	github.com/grafana/grafana-app-sdk/logging v0.63.0
 	github.com/prometheus/common v0.72.1
 	github.com/stretchr/testify v1.12.1
 	k8s.io/apimachinery v0.37.2

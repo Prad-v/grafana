@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Team sync for OAuth in Grafana OSS - user guide</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2328; }
+      code, pre { background: #f2f4f7; border-radius: 4px; }
+      code { padding: 0.1rem 0.3rem; }
+      pre { padding: 0.8rem 1rem; overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #d0d7de; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+      nav a { margin-right: 1rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Team sync for OAuth in Grafana OSS</h1>
+      <p>
+        Add users to Grafana teams, and remove them, based on the groups your identity provider returns at login.
+        Combine it with OAuth organization mapping to give every tenant its own organization and teams.
+      </p>
+      <nav>
+        <a href="#feature-list">Features</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#keycloak-demo">Keycloak demo</a>
+        <a href="#settings">Settings</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+        <a href="#changelog">Changelog</a>
+      </nav>
+    </header>
+
+    <main>
+      <section id="feature-list">
+        <h2>Features</h2>
+        <ul>
+          <li>Maps IdP groups to teams per organization with <code>&lt;group&gt;:&lt;org&gt;:&lt;team&gt;</code>.</li>
+          <li>Adds and removes external memberships on every login.</li>
+          <li>Keeps memberships that an administrator added manually.</li>
+          <li>Optionally creates missing teams.</li>
+          <li>Never blocks a login when a sync step fails.</li>
+        </ul>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <ol>
+          <li>Create one organization per tenant in Grafana.</li>
+          <li>Map groups to organizations with <code>org_mapping</code> in your OAuth provider section.</li>
+          <li>Turn on team sync and list the group to team mappings.</li>
+        </ol>
+        <pre><code>[auth.generic_oauth]
+groups_attribute_path = groups
+org_attribute_path = groups
+org_mapping = tenant-a-users:TenantA:Editor tenant-b-users:TenantB:Viewer
+
+[auth.team_sync]
+enabled = true
+auto_create_teams = false
+mappings = tenant-a-ops:TenantA:Ops tenant-b-ops:TenantB:Ops</code></pre>
+        <p>Run the tests in a container: <code>docker compose -f tests/docker-compose.yml run --rm test</code></p>
+      </section>
+
+      <section id="keycloak-demo">
+        <h2>Try it with Keycloak</h2>
+        <p>
+          The repository includes a Keycloak with two demo tenants. <code>make sso-deploy</code> builds Grafana and starts
+          both, wired together with org mapping and team sync. Open <code>http://localhost:3000</code> and sign in with Keycloak.
+          The password of every demo user is <code>SSO_TEST_PASSWORD</code> in <code>.env</code>.
+        </p>
+        <table>
+          <thead>
+            <tr><th>User</th><th>Organizations and roles</th><th>Teams</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>alice</code></td><td>TenantA: Admin</td><td>TenantA: Ops</td></tr>
+            <tr><td><code>bob</code></td><td>TenantA: Editor</td><td>TenantA: Developers</td></tr>
+            <tr><td><code>carol</code></td><td>TenantB: Viewer</td><td>TenantB: Ops</td></tr>
+            <tr><td><code>dave</code></td><td>TenantA: Editor, TenantB: Viewer</td><td>TenantB: Ops</td></tr>
+            <tr><td><code>erin</code></td><td>Main Org., TenantA, TenantB: Admin</td><td>None</td></tr>
+            <tr><td><code>frank</code></td><td>Main Org.: Viewer</td><td>None</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Run <code>make sso-test</code> to log in as each user through Keycloak and check the result.
+          Stop everything with <code>make sso-down</code>.
+        </p>
+      </section>
+
+      <section id="settings">
+        <h2>Settings</h2>
+        <table>
+          <thead>
+            <tr><th>Setting</th><th>Environment variable</th><th>Default</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>enabled</code></td><td><code>GF_AUTH_TEAM_SYNC_ENABLED</code></td><td><code>false</code></td><td>Turns team sync on.</td></tr>
+            <tr><td><code>mappings</code></td><td><code>GF_AUTH_TEAM_SYNC_MAPPINGS</code></td><td>empty</td><td>Space or comma separated <code>&lt;group&gt;:&lt;org name or id&gt;:&lt;team&gt;</code> list. Escape a colon with <code>\:</code>.</td></tr>
+            <tr><td><code>auto_create_teams</code></td><td><code>GF_AUTH_TEAM_SYNC_AUTO_CREATE_TEAMS</code></td><td><code>false</code></td><td>Creates a mapped team when it doesn't exist.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <ul>
+          <li><strong>Nothing happens:</strong> check <code>enabled = true</code> and the log for invalid mapping errors.</li>
+          <li><strong>User isn't added:</strong> the user must be a member of the organization. Check <code>org_mapping</code> first. Set <code>[log] filters = team.sync:debug</code>.</li>
+          <li><strong>Team doesn't exist:</strong> create it or set <code>auto_create_teams = true</code>.</li>
+          <li><strong>Organization can't be resolved:</strong> use the exact organization name or its numeric ID.</li>
+        </ul>
+        <p>The full guide is <code>docs/sources/setup-grafana/configure-access/configure-team-sync-oss.md</code>.</p>
+      </section>
+
+      <section id="changelog">
+        <h2>Changelog</h2>
+        <ul>
+          <li><strong>Added:</strong> the <code>[auth.team_sync]</code> section and the team sync login hook for OSS.</li>
+          <li><strong>Added:</strong> a Keycloak demo with two tenants (<code>make sso-deploy</code>) and end-to-end tests (<code>make sso-test</code>).</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

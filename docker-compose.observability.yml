@@ -1,0 +1,85 @@
+# VictoriaMetrics + VictoriaLogs + a mock NVIDIA GPU fleet that feeds them.
+#
+#   make obs-up          # start the three services and open the simulator UI
+#   make stack-up        # the above, plus Keycloak, Grafana and mcp-grafana
+#
+# The simulator exports DCGM-style metrics (scraped by VictoriaMetrics) and
+# pushes logs to VictoriaLogs with the same region/datacenter/node/gpu labels.
+# This file owns the shared `kekaflow-observability` network, so start it before
+# the Grafana override (docker-compose.observability-grafana.yml).
+# Configuration comes from .env (see .env.observability.example); every value
+# has a default, so none of it is required. None of these services has
+# authentication, so ports are published on 127.0.0.1 only (OBS_BIND_ADDRESS).
+name: kekaflow-observability
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:${VICTORIAMETRICS_TAG:-v1.156.0}
+    command:
+      - -storageDataPath=/storage
+      - -retentionPeriod=${OBS_RETENTION:-7d}
+      - -promscrape.config=/etc/victoriametrics/scrape.yml
+      - -promscrape.config.strictParse
+      # Make fresh samples queryable almost at once instead of after the default 30s.
+      - -search.latencyOffset=5s
+    restart: unless-stopped
+    ports:
+      - "${OBS_BIND_ADDRESS:-127.0.0.1}:${VICTORIAMETRICS_PORT:-8428}:8428"
+    volumes:
+      - vm-data:/storage
+      - ./observability/victoriametrics/scrape.yml:/etc/victoriametrics/scrape.yml:ro
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  # The image is scratch (no shell), so it has no healthcheck. The simulator
+  # retries pushes, and `make obs-test` waits until logs show up.
+  victorialogs:
+    image: victoriametrics/victoria-logs:${VICTORIALOGS_TAG:-v1.54.0}
+    command:
+      - -storageDataPath=/vlogs
+      - -retentionPeriod=${OBS_RETENTION:-7d}
+    restart: unless-stopped
+    ports:
+      - "${OBS_BIND_ADDRESS:-127.0.0.1}:${VICTORIALOGS_PORT:-9428}:9428"
+    volumes:
+      - vl-data:/vlogs
+    networks:
+      - observability
+
+  gpu-simulator:
+    image: ${GPU_SIM_IMAGE:-kekaflow/gpu-simulator}:${GPU_SIM_TAG:-dev}
+    build:
+      context: backend/services/gpu-simulator
+    restart: unless-stopped
+    depends_on:
+      victorialogs:
+        condition: service_started
+    environment:
+      SIM_PORT: "8090"
+      SIM_TICK_SECONDS: ${GPU_SIM_TICK_SECONDS:-5}
+      SIM_NODES_PER_DC: ${GPU_SIM_NODES_PER_DC:-4}
+      SIM_GPUS_PER_NODE: ${GPU_SIM_GPUS_PER_NODE:-8}
+      SIM_LOG_RATE: ${GPU_SIM_LOG_RATE:-0.2}
+      SIM_SEED: ${GPU_SIM_SEED:-}
+      VICTORIALOGS_URL: http://victorialogs:9428
+      SIM_LINK_GRAFANA: http://localhost:${GRAFANA_PORT:-3000}
+      SIM_LINK_VICTORIAMETRICS: http://localhost:${VICTORIAMETRICS_PORT:-8428}/vmui
+      SIM_LINK_VICTORIALOGS: http://localhost:${VICTORIALOGS_PORT:-9428}/select/vmui
+    ports:
+      - "${OBS_BIND_ADDRESS:-127.0.0.1}:${GPU_SIM_PORT:-8090}:8090"
+    networks:
+      - observability
+
+volumes:
+  vm-data:
+  vl-data:
+
+networks:
+  observability:
+    name: kekaflow-observability

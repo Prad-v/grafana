@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "grafana-chat-agent.fullname" . }}
+  labels:
+    {{- include "grafana-chat-agent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "grafana-chat-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "grafana-chat-agent.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Restart the pods when a chart-managed Secret changes.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "grafana-chat-agent.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: CHAT_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "grafana-chat-agent.authSecretName" . }}
+                  key: {{ .Values.auth.existingSecretKey }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "grafana-chat-agent.anthropicSecretName" . }}
+                  key: {{ .Values.anthropic.existingSecretKey }}
+            {{- if and .Values.mcp.enabled .Values.mcp.tokenSecret }}
+            - name: MCP_GRAFANA_SERVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mcp.tokenSecret }}
+                  key: {{ .Values.mcp.tokenSecretKey }}
+            {{- end }}
+            - name: HOME
+              value: /tmp
+            - name: CHAT_AGENT_MODEL
+              value: {{ .Values.agent.model | quote }}
+            - name: CHAT_AGENT_ALLOWED_LLM_HOSTS
+              value: {{ join "," .Values.agent.allowedLlmHosts | quote }}
+            - name: CHAT_AGENT_LOG_LEVEL
+              value: {{ .Values.agent.logLevel | quote }}
+            - name: CHAT_AGENT_ALLOW_WRITES
+              value: {{ .Values.agent.allowWrites | quote }}
+            - name: CHAT_AGENT_EXTRA_INSTRUCTION
+              value: {{ .Values.agent.extraInstruction | quote }}
+            - name: CHAT_AGENT_MAX_MESSAGE_CHARS
+              value: {{ .Values.agent.maxMessageChars | quote }}
+            - name: CHAT_AGENT_MAX_LLM_CALLS
+              value: {{ .Values.agent.maxLlmCalls | quote }}
+            - name: CHAT_AGENT_SESSION_TTL_S
+              value: {{ .Values.agent.sessionTtlSeconds | quote }}
+            - name: CHAT_AGENT_MAX_SESSIONS
+              value: {{ .Values.agent.maxSessions | quote }}
+            - name: CHAT_AGENT_BACKEND_TIMEOUT_S
+              value: {{ .Values.agent.backendTimeoutSeconds | quote }}
+            - name: CHAT_AGENT_MCP_ENABLED
+              value: {{ .Values.mcp.enabled | quote }}
+            - name: MCP_GRAFANA_URL
+              value: {{ .Values.mcp.url | quote }}
+            - name: CHAT_AGENT_METRICS_URL
+              value: {{ .Values.backends.metricsUrl | quote }}
+            - name: CHAT_AGENT_LOGS_URL
+              value: {{ .Values.backends.logsUrl | quote }}
+          volumeMounts:
+            # The root filesystem is read-only; Python and LiteLLM may still write temp files.
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

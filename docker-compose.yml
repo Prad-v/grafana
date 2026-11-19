@@ -1,0 +1,42 @@
+# Build and run Grafana from source with Docker Compose.
+#
+#   make compose-deploy        # build the image and start it (waits until healthy)
+#
+# Configuration comes from .env (copy .env.example). Nothing is run on the host.
+name: ${COMPOSE_PROJECT_NAME:-kekaflow-grafana}
+
+services:
+  grafana:
+    image: ${GRAFANA_IMAGE:-kekaflow/grafana}:${GRAFANA_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: final-alpine
+      args:
+        JS_PLATFORM: ${JS_PLATFORM:-linux/amd64}
+        JS_NODE_ENV: ${JS_NODE_ENV:-production}
+        JS_PNPM_BUILD_FLAG: ${JS_PNPM_BUILD_FLAG:-build}
+        GO_BUILD_TAGS: ${GO_BUILD_TAGS:-oss}
+        WIRE_TAGS: ${WIRE_TAGS:-oss}
+        COMMIT_SHA: ${COMMIT_SHA:-}
+        BUILD_BRANCH: ${BUILD_BRANCH:-}
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-}
+    platform: ${PLATFORM:-linux/amd64}
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q '\"database\": \"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  grafana-data:

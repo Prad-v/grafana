@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "grafana-chat-agent.fullname" . }}
+  labels:
+    {{- include "grafana-chat-agent.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+  selector:
+    {{- include "grafana-chat-agent.selectorLabels" . | nindent 4 }}

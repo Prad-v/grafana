@@ -366,6 +366,11 @@ type Cfg struct {
 	ManagedServiceAccountsEnabled     bool
 	IDUseExternalGroupsForGroupsClaim bool
 
+	// TeamSync* configure the OSS external group to team sync ([auth.team_sync]).
+	TeamSyncEnabled         bool
+	TeamSyncMappings        []string
+	TeamSyncAutoCreateTeams bool
+
 	// AWS Plugin Auth
 	AWSAllowedAuthProviders          []string
 	AWSAssumeRoleEnabled             bool
@@ -2218,6 +2223,11 @@ func readAuthSettings(iniFile *ini.File, cfg *Cfg) (err error) {
 	}
 
 	cfg.IDUseExternalGroupsForGroupsClaim = auth.Key("id_use_external_groups_for_groups_claim").MustBool(false)
+
+	teamSync := iniFile.Section("auth.team_sync")
+	cfg.TeamSyncEnabled = teamSync.Key("enabled").MustBool(false)
+	cfg.TeamSyncMappings = util.SplitString(teamSync.Key("mappings").MustString(""))
+	cfg.TeamSyncAutoCreateTeams = teamSync.Key("auto_create_teams").MustBool(false)
 
 	// anonymous access
 	cfg.readAnonymousSettings()

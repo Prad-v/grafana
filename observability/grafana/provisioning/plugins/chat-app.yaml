@@ -1,0 +1,23 @@
+apiVersion: 1
+
+# Enables the chat page and points its plugin proxy at the agent service.
+# Applies to the main organization only; other organizations enable the plugin
+# under Administration > Plugins and data > Plugins with the same settings.
+#
+# Grafana applies this file on every start and replaces the plugin settings with
+# it, so a model chosen on the plugin's Settings page does not survive a restart
+# unless it is also set here. Set CHAT_LLM_PROVIDER, CHAT_LLM_BASE_URL,
+# CHAT_LLM_MODEL and CHAT_LLM_API_KEY in .env to keep it; leave them empty to use
+# the agent's own model (CHAT_AGENT_MODEL and ANTHROPIC_API_KEY).
+apps:
+  - type: kekaflow-chat-app
+    org_id: 1
+    disabled: false
+    jsonData:
+      agentUrl: http://chat-agent:8080
+      llmProvider: $CHAT_LLM_PROVIDER
+      llmBaseUrl: $CHAT_LLM_BASE_URL
+      llmModel: $CHAT_LLM_MODEL
+    secureJsonData:
+      agentToken: $CHAT_AGENT_TOKEN
+      llmApiKey: $CHAT_LLM_API_KEY

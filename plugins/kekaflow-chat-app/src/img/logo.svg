@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Kekaflow Assistant">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f55f3e"/>
+      <stop offset="1" stop-color="#ff9830"/>
+    </linearGradient>
+  </defs>
+  <path d="M10 12h44a4 4 0 0 1 4 4v26a4 4 0 0 1-4 4H30L18 56V46h-8a4 4 0 0 1-4-4V16a4 4 0 0 1 4-4z" fill="url(#g)"/>
+  <path d="M14 33l8-9 7 10 8-14 7 8 6-5" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,11 @@
+The chat agent is installed as {{ include "grafana-chat-agent.fullname" . }}.
+
+Point the Kekaflow Assistant plugin in Grafana at it:
+
+  agentUrl:   http://{{ include "grafana-chat-agent.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  agentToken: the value of the "{{ .Values.auth.existingSecretKey }}" key in the Secret "{{ include "grafana-chat-agent.authSecretName" . }}"
+
+Check the agent:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "grafana-chat-agent.fullname" . }} 8081:{{ .Values.service.port }}
+  curl http://localhost:8081/healthz

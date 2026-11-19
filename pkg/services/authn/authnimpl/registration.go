@@ -27,6 +27,7 @@ import (
 	"github.com/grafana/grafana/pkg/services/pluginsintegration/pluginauth"
 	"github.com/grafana/grafana/pkg/services/quota"
 	"github.com/grafana/grafana/pkg/services/rendering"
+	"github.com/grafana/grafana/pkg/services/team"
 	tempuser "github.com/grafana/grafana/pkg/services/temp_user"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/setting"
@@ -46,7 +47,7 @@ func ProvideRegistration(
 	socialService social.Service, cache *remotecache.RemoteCache,
 	ldapService service.LDAP, settingsProvider setting.Provider,
 	tracer tracing.Tracer, tempUserService tempuser.Service, notificationService notifications.Service,
-	pluginAuth *pluginauth.Config,
+	pluginAuth *pluginauth.Config, teamService team.Service, teamPermissions accesscontrol.TeamPermissionsService,
 ) (Registration, error) {
 	logger := log.New("authn.registration")
 
@@ -120,6 +121,8 @@ func ProvideRegistration(
 	authnSvc.RegisterPostAuthHook(userSync.SyncUserHook, 10)
 	authnSvc.RegisterPostAuthHook(userSync.EnableUserHook, 20)
 	authnSvc.RegisterPostAuthHook(orgSync.SyncOrgRolesHook, 40)
+	// After the org sync (team membership requires org membership) and before FetchSyncedUserHook (100) reads the teams.
+	authnSvc.RegisterPostAuthHook(sync.ProvideTeamSync(cfg, orgService, teamService, teamPermissions, tracer).SyncTeamsHook, 50)
 	authnSvc.RegisterPostAuthHook(userSync.SyncLastSeenHook, 130)
 	authnSvc.RegisterPostAuthHook(sync.ProvideOAuthTokenSync(oauthTokenService, sessionService, socialService, tracer, features).SyncOauthTokenHook, 60)
 	authnSvc.RegisterPostAuthHook(userSync.FetchSyncedUserHook, 100)

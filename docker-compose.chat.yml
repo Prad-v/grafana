@@ -1,0 +1,79 @@
+# Adds the Kekaflow chat assistant to the full stack: the ADK/Claude agent service
+# and the Grafana app plugin that provides the chat page.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sso.yml \
+#     -f docker-compose.observability-grafana.yml -f docker-compose.chat.yml \
+#     up -d grafana mcp-grafana chat-agent
+#
+# `make stack-up` does this in the right order. Needs the `kekaflow-observability`
+# network, which docker-compose.observability.yml creates, and CHAT_AGENT_TOKEN in
+# .env (`make chat-env` generates one).
+services:
+  # The agent: Google ADK + Claude, talking to mcp-grafana for Grafana's tools and
+  # straight to VictoriaMetrics/VictoriaLogs for anomaly detection. Grafana's plugin
+  # proxy is the only client; it adds the bearer token, so users never see it.
+  chat-agent:
+    build:
+      context: backend/services/grafana-chat-agent
+    image: ${CHAT_AGENT_IMAGE:-kekaflow/grafana-chat-agent}:${CHAT_AGENT_TAG:-dev}
+    restart: unless-stopped
+    depends_on:
+      mcp-grafana:
+        condition: service_healthy
+    environment:
+      CHAT_AGENT_TOKEN: ${CHAT_AGENT_TOKEN:?set CHAT_AGENT_TOKEN in .env (make chat-env generates one)}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CHAT_AGENT_MODEL: ${CHAT_AGENT_MODEL:-anthropic/claude-sonnet-5-5}
+      CHAT_AGENT_LOG_LEVEL: ${CHAT_AGENT_LOG_LEVEL:-INFO}
+      CHAT_AGENT_ALLOW_WRITES: ${CHAT_AGENT_ALLOW_WRITES:-false}
+      CHAT_AGENT_EXTRA_INSTRUCTION: ${CHAT_AGENT_EXTRA_INSTRUCTION:-}
+      # Hosts a LiteLLM proxy address on the settings page may point at. `litellm` is the usual
+      # service name; `fake-llm` is the stand-in proxy that `make chat-e2e` starts.
+      CHAT_AGENT_ALLOWED_LLM_HOSTS: ${CHAT_AGENT_ALLOWED_LLM_HOSTS:-api.anthropic.com,litellm,fake-llm}
+      MCP_GRAFANA_URL: http://mcp-grafana:8000/mcp
+      CHAT_AGENT_METRICS_URL: http://victoriametrics:8428
+      CHAT_AGENT_LOGS_URL: http://victorialogs:9428
+    ports:
+      # For debugging with curl; Grafana reaches the agent over the compose network.
+      - "${OBS_BIND_ADDRESS:-127.0.0.1}:${CHAT_AGENT_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    networks:
+      - observability
+
+  # One-shot job: copies the built plugin into a volume Grafana mounts read-only.
+  chat-plugin:
+    build:
+      context: plugins/kekaflow-chat-app
+    image: ${CHAT_PLUGIN_IMAGE:-kekaflow/chat-plugin}:${CHAT_PLUGIN_TAG:-dev}
+    restart: "no"
+    volumes:
+      - chat-plugin-dist:/plugin
+
+  grafana:
+    depends_on:
+      chat-plugin:
+        condition: service_completed_successfully
+    environment:
+      # The plugin is built here and not signed by Grafana Labs.
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: kekaflow-chat-app
+      # Makes the plugin proxy send X-Grafana-User, so the agent keeps one
+      # conversation history per user.
+      GF_DATAPROXY_SEND_USER_HEADER: "true"
+      # Read by the provisioning file below.
+      CHAT_AGENT_TOKEN: ${CHAT_AGENT_TOKEN:?set CHAT_AGENT_TOKEN in .env (make chat-env generates one)}
+      # Optional. Empty means "use the agent's own model".
+      CHAT_LLM_PROVIDER: ${CHAT_LLM_PROVIDER:-}
+      CHAT_LLM_BASE_URL: ${CHAT_LLM_BASE_URL:-}
+      CHAT_LLM_MODEL: ${CHAT_LLM_MODEL:-}
+      CHAT_LLM_API_KEY: ${CHAT_LLM_API_KEY:-}
+    volumes:
+      - chat-plugin-dist:/var/lib/grafana/plugins/kekaflow-chat-app:ro
+      - ./observability/grafana/provisioning/plugins:/etc/grafana/provisioning/plugins:ro
+
+volumes:
+  chat-plugin-dist:

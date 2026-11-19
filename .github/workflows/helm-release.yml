@@ -1,0 +1,119 @@
+name: Helm release (chat agent)
+
+# After the tests pass on main: build and push the agent image, bump the chart version
+# and the image tag, and commit the change back.
+#
+# Set the repository variable CHAT_AGENT_REGISTRY to push somewhere other than GitHub
+# Container Registry (for example docker.io/acme). The default is ghcr.io/<owner>.
+on:
+  workflow_run:
+    workflows: ["Tests folder (Docker Compose)"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: helm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Bump chart and publish image
+    # Only for a successful run on a push to main, never for pull requests.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      # A commit made by this workflow must not release again.
+      - name: Skip our own bump commits
+        id: guard
+        run: |
+          subject=$(git log -1 --format=%s)
+          case "$subject" in
+            "chore(helm): release grafana-chat-agent"*) echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "skip=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Check that main has not moved on
+        if: steps.guard.outputs.skip == 'false'
+        id: head
+        run: |
+          git fetch origin main
+          if [ "$(git rev-parse origin/main)" != "${{ github.event.workflow_run.head_sha }}" ]; then
+            echo "A newer commit exists on main; its own run will release." >&2
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump the chart version and image tag
+        if: steps.guard.outputs.skip == 'false' && steps.head.outputs.stale == 'false'
+        id: bump
+        env:
+          IMAGE_REGISTRY: ${{ vars.CHAT_AGENT_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
+        run: |
+          prefix=$(echo "$IMAGE_REGISTRY" | tr '[:upper:]' '[:lower:]')
+          message=$(git log -1 --format=%B)
+          version=$(helm/bump.sh helm/grafana-chat-agent --message "$message" --repository "$prefix/grafana-chat-agent")
+          {
+            echo "version=$version"
+            echo "image=$prefix/grafana-chat-agent"
+            echo "plugin_image=$prefix/chat-plugin"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Re-run the chart tests on the bumped chart
+        if: steps.bump.outputs.version != ''
+        run: docker compose -f tests/docker-compose.yml run --rm helm-chart
+
+      - name: Log in to the registry
+        if: steps.bump.outputs.version != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ startsWith(steps.bump.outputs.image, 'ghcr.io/') && 'ghcr.io' || '' }}
+          username: ${{ startsWith(steps.bump.outputs.image, 'ghcr.io/') && github.actor || secrets.CHAT_AGENT_REGISTRY_USERNAME }}
+          password: ${{ startsWith(steps.bump.outputs.image, 'ghcr.io/') && secrets.GITHUB_TOKEN || secrets.CHAT_AGENT_REGISTRY_PASSWORD }}
+
+      - name: Build and push the agent image
+        if: steps.bump.outputs.version != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: backend/services/grafana-chat-agent
+          push: true
+          tags: |
+            ${{ steps.bump.outputs.image }}:${{ steps.bump.outputs.version }}
+            ${{ steps.bump.outputs.image }}:latest
+
+      # Grafana's pods copy the plugin out of this image; the chart does not deploy it.
+      - name: Build and push the plugin image
+        if: steps.bump.outputs.version != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: plugins/kekaflow-chat-app
+          push: true
+          tags: |
+            ${{ steps.bump.outputs.plugin_image }}:${{ steps.bump.outputs.version }}
+            ${{ steps.bump.outputs.plugin_image }}:latest
+
+      # Commit only after the images exist, so the chart never points at a missing tag.
+      - name: Commit the new version
+        if: steps.bump.outputs.version != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add helm/grafana-chat-agent/Chart.yaml helm/grafana-chat-agent/values.yaml
+          git commit -m "chore(helm): release grafana-chat-agent ${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main

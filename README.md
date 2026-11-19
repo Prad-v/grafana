@@ -25,6 +25,15 @@ Unsure if Grafana is for you? Watch Grafana in action on [play.grafana.org](http
 
 The Grafana documentation is available at [grafana.com/docs](https://grafana.com/docs/).
 
+## Local development stack
+
+Build and run Grafana in containers, with no toolchain on the host:
+
+- [Build and deploy with Docker Compose](docs/sources/developers/docker-compose.md): `make compose-deploy`.
+- [Run the GPU observability stack](docs/sources/developers/observability-stack.md): `make stack-up` starts VictoriaMetrics, VictoriaLogs, a mock multi-region NVIDIA GPU fleet with a control UI, Keycloak, Grafana, and mcp-grafana.
+- [Anomaly detection for any metrics data source](docs/sources/developers/anomaly-detection.md): the architecture and the Go detection engine (`backend/services/anomaly-engine`) behind a planned Grafana data source plugin that works with Mimir, Prometheus, and VictoriaMetrics. `make anomaly-test` runs its tests. See also the [user guide](docs/static/anomaly-detection/index.html).
+- [Ask questions about your data with the chat assistant](docs/sources/developers/chat-assistant.md): a Grafana app plugin backed by a Google ADK and Claude agent that answers questions about metrics, logs, alerts, and anomalies through mcp-grafana. `make stack-up` starts it. See also the [user guide](docs/static/chat-assistant/index.html).
+
 ## Contributing
 
 If you're interested in contributing to the Grafana project:

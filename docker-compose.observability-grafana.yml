@@ -1,0 +1,54 @@
+# Wires Grafana to VictoriaMetrics and VictoriaLogs, and adds mcp-grafana.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sso.yml \
+#     -f docker-compose.observability-grafana.yml up -d grafana mcp-grafana
+#
+# `make stack-up` does this in the right order. Needs the `kekaflow-observability`
+# network, which docker-compose.observability.yml creates.
+services:
+  grafana:
+    environment:
+      # The official VictoriaMetrics data source plugins, installed before Grafana
+      # starts so the provisioned data sources can load. Needs outbound access to
+      # grafana.com the first time; the plugins then live in the grafana-data volume.
+      GF_PLUGINS_PREINSTALL_SYNC: victoriametrics-metrics-datasource,victoriametrics-logs-datasource
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana-dashboards/gpu:ro
+    networks:
+      - observability
+
+  # Grafana's MCP server. AI agents connect to http://localhost:${MCP_GRAFANA_PORT}/mcp
+  # (streamable HTTP) and get dashboards, queries and alerting as tools.
+  # It authenticates to Grafana with MCP_GRAFANA_TOKEN (a service account token)
+  # when set, otherwise with the admin user from .env.
+  mcp-grafana:
+    image: grafana/mcp-grafana:${MCP_GRAFANA_TAG:-2.3.0-alpine}
+    restart: unless-stopped
+    depends_on:
+      grafana:
+        condition: service_healthy
+    command:
+      - --transport=streamable-http
+      - --allowed-hosts=localhost:${MCP_GRAFANA_PORT:-8000},127.0.0.1:${MCP_GRAFANA_PORT:-8000},mcp-grafana:8000
+    environment:
+      GRAFANA_URL: http://grafana:3000
+      GRAFANA_SERVICE_ACCOUNT_TOKEN: ${MCP_GRAFANA_TOKEN:-}
+      GRAFANA_USERNAME: ${GF_SECURITY_ADMIN_USER:-admin}
+      GRAFANA_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+    ports:
+      - "${OBS_BIND_ADDRESS:-127.0.0.1}:${MCP_GRAFANA_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    networks:
+      - observability
+
+networks:
+  observability:
+    name: kekaflow-observability
+    external: true

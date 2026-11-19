@@ -131,6 +131,7 @@ module.exports = [
       'packages/grafana-ui/src/components/Icon/iconBundle.ts',
       'pkg',
       'playwright-report',
+      'plugins/kekaflow-chat-app', // standalone plugin with its own tsconfig, built and typechecked in its Dockerfile
       'public/lib/monaco/', // this path is no longer required but local dev environments may still have it
       'public/locales/_build',
       'public/locales/**/*.js',

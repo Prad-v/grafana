@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Build and deploy Grafana with Docker Compose - user guide</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2328; }
+      code, pre { background: #f2f4f7; border-radius: 4px; }
+      code { padding: 0.1rem 0.3rem; }
+      pre { padding: 0.8rem 1rem; overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #d0d7de; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+      nav a { margin-right: 1rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Build and deploy Grafana with Docker Compose</h1>
+      <p>Build Grafana from source and run it locally with one <code>make</code> command. Everything runs in containers.</p>
+      <nav>
+        <a href="#feature-list">Features</a>
+        <a href="#quick-start">Quick start</a>
+        <a href="#targets">Targets</a>
+        <a href="#settings">Settings</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+        <a href="#changelog">Changelog</a>
+      </nav>
+    </header>
+
+    <main>
+      <section id="feature-list">
+        <h2>Features</h2>
+        <ul>
+          <li>Builds the image from the repository <code>Dockerfile</code>.</li>
+          <li>Deploys with Docker Compose and waits for the health check.</li>
+          <li>Keeps Grafana data in a named volume.</li>
+          <li>Runs the <code>tests/</code> folder in a container.</li>
+        </ul>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <pre>make compose-deploy</pre>
+        <p>Then open <a href="http://localhost:3000">http://localhost:3000</a> and sign in with <code>admin</code> / <code>admin</code>, or the values in <code>.env</code>. The first build takes a long time.</p>
+      </section>
+
+      <section id="targets">
+        <h2>Make targets</h2>
+        <table>
+          <thead><tr><th>Target</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>compose-env</code></td><td>Create <code>.env</code> from <code>.env.example</code>.</td></tr>
+            <tr><td><code>compose-config</code></td><td>Validate and print the Compose configuration.</td></tr>
+            <tr><td><code>compose-build</code></td><td>Build the image.</td></tr>
+            <tr><td><code>compose-up</code></td><td>Start Grafana without rebuilding.</td></tr>
+            <tr><td><code>compose-deploy</code></td><td>Build, start, and wait until healthy.</td></tr>
+            <tr><td><code>compose-down</code></td><td>Stop containers. Data is kept.</td></tr>
+            <tr><td><code>compose-restart</code></td><td>Restart Grafana.</td></tr>
+            <tr><td><code>compose-logs</code></td><td>Follow logs.</td></tr>
+            <tr><td><code>compose-ps</code></td><td>Show container status.</td></tr>
+            <tr><td><code>compose-test</code></td><td>Run <code>tests/</code> in a container.</td></tr>
+            <tr><td><code>compose-clean</code></td><td>Remove containers, data volume, and image.</td></tr>
+            <tr><td><code>obs-up</code></td><td>Start VictoriaMetrics, VictoriaLogs, and the GPU simulator. See the <a href="../observability-stack/index.html">GPU observability stack</a>.</td></tr>
+            <tr><td><code>stack-up</code></td><td>Start the observability services, Keycloak, Grafana, and mcp-grafana together.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="settings">
+        <h2>Settings</h2>
+        <p>Set these in <code>.env</code>.</p>
+        <table>
+          <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>GRAFANA_IMAGE</code> / <code>GRAFANA_TAG</code></td><td><code>kekaflow/grafana</code> / <code>dev</code></td><td>Image name and tag.</td></tr>
+            <tr><td><code>GRAFANA_PORT</code></td><td><code>3000</code></td><td>Host port.</td></tr>
+            <tr><td><code>GF_SECURITY_ADMIN_USER</code></td><td><code>admin</code></td><td>Initial admin user.</td></tr>
+            <tr><td><code>GF_SECURITY_ADMIN_PASSWORD</code></td><td><code>admin</code></td><td>Initial admin password. Change it beyond local use.</td></tr>
+            <tr><td><code>PLATFORM</code> / <code>JS_PLATFORM</code></td><td><code>linux/amd64</code></td><td>Runtime and frontend build platform.</td></tr>
+          </tbody>
+        </table>
+        <p>For production Kubernetes deployments, use Helm.</p>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <ul>
+          <li><strong>Slow build on Apple Silicon:</strong> the frontend builder runs under amd64 emulation. Give Docker at least 8 GB of memory.</li>
+          <li><strong>Timeout waiting for healthy:</strong> run <code>make compose-logs</code>.</li>
+          <li><strong>Port in use:</strong> set <code>GRAFANA_PORT</code> in <code>.env</code>.</li>
+          <li><strong>Clean slate:</strong> <code>make compose-clean</code>, then <code>make compose-deploy</code>.</li>
+        </ul>
+      </section>
+
+      <section id="changelog">
+        <h2>Changelog</h2>
+        <ul>
+          <li>Added <code>make compose-*</code> targets and <code>docker-compose.yml</code> to build and deploy Grafana.</li>
+          <li>Added <code>make obs-*</code> and <code>make stack-*</code> targets for the <a href="../observability-stack/index.html">GPU observability stack</a>. <code>compose-test</code> now also runs the simulator unit tests.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
