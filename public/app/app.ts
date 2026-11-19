@@ -38,6 +38,7 @@ import {
   setPanelScreenshotService,
   setPluginFunctionsHook,
   setMegaMenuOpenHook,
+  setStarsSrv,
   logError,
   isFetchError,
 } from '@grafana/runtime';
@@ -133,6 +134,7 @@ import { QueryRunner } from './features/query/state/QueryRunner';
 import { runRequest } from './features/query/state/runRequest';
 import { initWindowRuntime } from './features/runtime/init';
 import { cleanupOldExpandedFolders } from './features/search/utils';
+import { CollectionsStarsSrv } from './features/stars/service';
 import { variableAdapters } from './features/variables/adapters';
 import { createAdHocVariableAdapter } from './features/variables/adhoc/adapter';
 import { createConstantVariableAdapter } from './features/variables/constant/adapter';
@@ -285,6 +287,9 @@ export class GrafanaApp {
       if (appPluginMetasError !== undefined) {
         notifyAppPluginMetasError(appPluginMetasError);
       }
+
+      // After the store exists: the service reads and dispatches to it.
+      setStarsSrv(new CollectionsStarsSrv());
 
       initExtensions();
 
